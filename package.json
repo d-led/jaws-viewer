@@ -1,0 +1,53 @@
+{
+  "name": "jaws-viewer",
+  "version": "0.0.1",
+  "type": "module",
+  "description": "Web-based 3D viewer for intraoral scan exports: STL layers with per-layer transparency, exocad .dentalProject metadata and .matrix4 transforms.",
+  "license": "MPL-2.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "actions:up": "actions-up --style=preserve -y",
+    "dev": "vite",
+    "watch": "vite",
+    "build": "npm run typecheck && vite build",
+    "sample:check": "node scripts/check-sample.mjs",
+    "typecheck": "tsc --noEmit",
+    "lint": "scripts/lint.sh",
+    "prettier": "prettier -w .",
+    "prettier:check": "prettier --check .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "test:e2e:desktop": "playwright test --project=desktop",
+    "test:e2e:mobile": "playwright test --project=mobile",
+    "test:e2e:report": "playwright show-report",
+    "preview": "vite preview",
+    "start": "npm run preview"
+  },
+  "dependencies": {
+    "fast-xml-parser": "^5.11.1",
+    "fflate": "^0.8.3",
+    "idb-keyval": "^6.3.0",
+    "three": "^0.186.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@types/node": "^26.6.2",
+    "@types/three": "^0.186.0",
+    "@vitest/coverage-v8": "^5.0.1",
+    "crap4ts": "^1.0.1",
+    "eslint": "^10.11.0",
+    "fake-indexeddb": "^6.2.5",
+    "happy-dom": "^20.14.5",
+    "jscpd": "^5.3.1",
+    "oxlint": "^1.85.0",
+    "prettier": "^3.9.8",
+    "@typescript/native": "npm:typescript@^7.0.2",
+    "typescript": "npm:@typescript/typescript6@^6.0.2",
+    "typescript-eslint": "^8.70.1",
+    "vite": "^8.3.0",
+    "vitest": "^5.0.1"
+  }
+}

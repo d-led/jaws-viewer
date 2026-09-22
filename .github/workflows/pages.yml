@@ -1,0 +1,73 @@
+# Publishes the viewer to GitHub Pages.
+#
+# The app is entirely client-side — the files are read in the browser, nothing is uploaded and
+# no server runs — so the site is only the built static files. `dist` is deployed as-is.
+name: pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never let two deployments race; the newest one wins.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build the site
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Work out where the site will be served from
+        id: pages
+        uses: actions/configure-pages@v6.0.0
+        with:
+          # Turns Pages on for a repository that has never had it, so the first deploy does not
+          # fail on a site that does not exist yet.
+          enablement: true
+
+      - name: Build the site
+        run: npm run build
+        env:
+          # A project site is served from /<repository>/, so every asset URL has to be prefixed
+          # with it. The action knows the answer; for a user site it is empty, which
+          # vite.config.ts reads as the root.
+          VITE_BASE: ${{ steps.pages.outputs.base_path }}
+
+      # The sample is data, so nothing else would notice it missing until a reader clicked for it.
+      - name: Check the sample came through the build
+        run: npm run sample:check
+
+      - name: Upload the site
+        uses: actions/upload-pages-artifact@v5.0.0
+        with:
+          path: dist
+
+  deploy:
+    name: Deploy
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5.0.1

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Treatment UseRecipientMaterialConfiguration="true">
+	<DateTime>2026-09-02T08:42:50</DateTime>
+	<TrayNo>1</TrayNo>
+	<Notes>Generated sample, not a patient. It ships with the viewer so the tool can be tried without an export of your own.</Notes>
+	<ProjectGUID>00000000-0000-4000-8000-000000000001</ProjectGUID>
+	<Teeth/>
+	<Practice><PracticeId>001</PracticeId><PracticeName>Sample Practice</PracticeName></Practice>
+	<Patient><PatientId>1</PatientId><PatientName>Sample Patient</PatientName></Patient>
+	<ToothColor>A2</ToothColor>
+	<AntagonistType>DigitalImpressionScan</AntagonistType>
+	<MovementMarkerScan>false</MovementMarkerScan>
+	<DentalDBProductName>[Version 3.0]</DentalDBProductName>
+</Treatment>
