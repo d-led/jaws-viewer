@@ -40,7 +40,7 @@ export function createImmersiveMode(options: {
     setFilled(!isFilled()),
   );
   const exit = iconButton("exit", EXIT_LABEL, () => setFilled(false), {
-    class: "button button--icon button--accent stage__exit",
+    class: "button button--icon button--blue stage__exit",
     attrs: { "aria-keyshortcuts": "Escape" },
   });
 

@@ -7,6 +7,8 @@
   --text: #e6ebf2;
   --text-muted: #93a1b5;
   --accent: #63b3ed;
+  --green: #68d391;
+  --yellow: #ecc94b;
   --danger: #fc8181;
   --radius: 8px;
   --sidebar-width: 22rem;
@@ -408,14 +410,30 @@ body {
   display: block;
 }
 
-/* The one control that has to be found at a glance, floating over whatever is behind it. */
-.button--accent {
-  border-color: var(--accent);
-  background: var(--accent);
+/* A filled button: the action a group is really offering, marked in colour.
+   The empty state offers three ways in, one per colour, and the sidebar shows the same three. */
+.button--blue,
+.button--green,
+.button--yellow {
   color: var(--surface-0);
+  border-color: transparent;
 }
 
-.button--accent:hover {
+.button--blue {
+  background: var(--accent);
+}
+
+.button--green {
+  background: var(--green);
+}
+
+.button--yellow {
+  background: var(--yellow);
+}
+
+.button--blue:hover,
+.button--green:hover,
+.button--yellow:hover {
   border-color: var(--text);
   background: var(--text);
 }

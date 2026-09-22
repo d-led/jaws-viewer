@@ -324,16 +324,19 @@ export function createApp(root: HTMLElement, options: AppOptions): App {
     el("p", { class: "empty__privacy", text: PRIVACY_NOTE }),
     el("div", { class: "empty__actions" }, [
       button("Open files…", () => filePicker.click(), {
+        class: "button button--blue",
         title: "Choose STL, .dentalProject and .matrix4 files",
       }),
       ...(foldersPickable
         ? [
             button("Open folder…", () => folderPicker.click(), {
+              class: "button button--yellow",
               title: "Choose the whole export folder",
             }),
           ]
         : []),
       button("Load sample", () => void loadSample(), {
+        class: "button button--green",
         title: "A small bundle generated for this viewer, with no patient data",
       }),
     ]),
@@ -342,9 +345,15 @@ export function createApp(root: HTMLElement, options: AppOptions): App {
   // Loading a different bundle stays on offer at all times; trying the sample does not, because
   // it is only of interest while there is nothing loaded to look at. It lives in the empty state.
   const actions = el("div", { class: "sidebar__actions" }, [
-    iconButton("files", "Open files…", () => filePicker.click()),
+    iconButton("files", "Open files…", () => filePicker.click(), {
+      class: "button button--icon button--blue",
+    }),
     ...(foldersPickable
-      ? [iconButton("folder", "Open folder…", () => folderPicker.click())]
+      ? [
+          iconButton("folder", "Open folder…", () => folderPicker.click(), {
+            class: "button button--icon button--yellow",
+          }),
+        ]
       : []),
   ]);
 
