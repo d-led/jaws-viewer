@@ -220,6 +220,11 @@ test.describe("the first screen on a phone", () => {
   test("fills the screen with the model rather than the browser", async ({
     page,
   }) => {
+    // The slowest test there is: a phone-sized viewport at device pixel ratio, drawn by a
+    // software rasteriser, and every click has to wait for a frame to settle. It has run past the
+    // default budget on a loaded runner while behaving perfectly.
+    test.slow();
+
     await page.goto("/");
     await page.setInputFiles(FILE_INPUT, bundle.files);
     await expect(page.getByText(/Loaded 3 layers/)).toBeVisible();
