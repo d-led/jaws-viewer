@@ -41,6 +41,32 @@ describe("reading a dropped bundle", () => {
     expect(bundle.skipped).toEqual([]);
   });
 
+  it("ignores the files an operating system leaves in a copied folder", () => {
+    const bundle = readBundle([
+      loose("._Case-UpperJaw.stl", binaryStl(3)),
+      loose(".DS_Store", textBytes("junk")),
+      loose("Thumbs.db", textBytes("junk")),
+      zip("export.zip", {
+        "__MACOSX/Case-UpperJaw.stl": binaryStl(3),
+        "Case-UpperJaw.stl": binaryStl(3),
+      }),
+    ]);
+
+    // The scan inside the zip is the only thing here that belongs to an export.
+    expect(bundle.scans.map((scan) => scan.kind)).toEqual(["upper"]);
+    expect(bundle.skipped).toEqual([]);
+  });
+
+  it("reads a name a Mac handed over decomposed as one name", () => {
+    // A Mac writes "Böhm" as "o" and a combining diaeresis, which is not the same string.
+    const bundle = readBundle([
+      loose("Case-Bo\u0308hm-UpperJaw.stl", binaryStl(3)),
+    ]);
+
+    expect(bundle.scans[0]?.fileName).toBe("Case-Böhm-UpperJaw.stl");
+    expect(bundle.scans[0]?.label).toBe("Upper Jaw");
+  });
+
   it("reads the same bundle straight out of a zip", () => {
     const bundle = readBundle([
       zip("export.zip", {

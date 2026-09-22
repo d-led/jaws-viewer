@@ -47,7 +47,10 @@ export function readBundle(files: readonly BundleFile[]): DentalBundle {
     scans: [],
     skipped: [],
   };
-  const queue: QueuedFile[] = files.map((file) => ({ file, depth: 0 }));
+  const queue: QueuedFile[] = files.flatMap((file) => {
+    const wanted = readable(file);
+    return wanted === null ? [] : [{ file: wanted, depth: 0 }];
+  });
 
   while (queue.length > 0) {
     const queued = queue.shift();
@@ -55,6 +58,32 @@ export function readBundle(files: readonly BundleFile[]): DentalBundle {
     absorb(bundle, queued, queue);
   }
   return bundle;
+}
+
+/**
+ * The same file with its name in one form, or `null` when it is not part of an export at all.
+ *
+ * Copying, zipping or sharing a folder leaves the operating system's own files in it: a Mac's
+ * AppleDouble stubs and `.DS_Store`, Windows' `Thumbs.db`, and the `__MACOSX` folder a Mac puts
+ * inside a zip. None of them belongs to the export, and reporting them as unrecognised would bury
+ * the files that do.
+ *
+ * The name is also composed into its shorter form, because a Mac hands `Böhm` over as `o`
+ * followed by a combining diaeresis. Same name, two code points, and a stray mark in some fonts.
+ */
+function readable(file: BundleFile): BundleFile | null {
+  const name = baseName(file.path);
+  if (
+    name.startsWith("._") ||
+    name === ".DS_Store" ||
+    name === "Thumbs.db" ||
+    file.path.split("/").includes("__MACOSX")
+  ) {
+    return null;
+  }
+
+  const path = file.path.normalize("NFC");
+  return path === file.path ? file : { ...file, path };
 }
 
 function absorb(
@@ -93,7 +122,8 @@ function expandArchive(
 
   try {
     for (const entry of readZipEntries(queued.file.bytes)) {
-      queue.push({ file: entry, depth: queued.depth + 1 });
+      const file = readable(entry);
+      if (file !== null) queue.push({ file, depth: queued.depth + 1 });
     }
   } catch (error) {
     bundle.skipped.push(
