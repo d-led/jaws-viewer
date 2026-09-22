@@ -2,6 +2,11 @@
 #
 # The app is entirely client-side — the files are read in the browser, nothing is uploaded and
 # no server runs — so the site is only the built static files. `dist` is deployed as-is.
+#
+# Pages has to be switched on for the repository once, with "GitHub Actions" as its source, which
+# the workflow token cannot do for itself:
+#
+#   gh api -X POST repos/<owner>/<repo>/pages -f build_type=workflow
 name: pages
 
 on:
@@ -38,10 +43,6 @@ jobs:
       - name: Work out where the site will be served from
         id: pages
         uses: actions/configure-pages@v6.0.0
-        with:
-          # Turns Pages on for a repository that has never had it, so the first deploy does not
-          # fail on a site that does not exist yet.
-          enablement: true
 
       - name: Build the site
         run: npm run build
