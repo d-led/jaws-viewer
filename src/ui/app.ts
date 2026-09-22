@@ -457,12 +457,28 @@ function toMatrixTarget(view: LayerView): MatrixTarget {
   };
 }
 
+/**
+ * What the file dialog is offered, so a folder full of scans does not have to be picked through.
+ *
+ * A hint for the dialog only: files are still read by what is inside them, so an export with
+ * other names — or none — loads when it is dropped on the page instead.
+ */
+const ACCEPTED_TYPES = [
+  ".zip", // a whole export, zipped
+  ".stl", // a scan
+  ".dentalProject", // the case, as this vendor names it
+  ".matrix4", // where the layers go
+  ".xml", // the case, as other vendors name it
+].join(",");
+
 function createFilePicker(
   kind: "files" | "folder",
   onPicked: (files: FileList) => void,
 ): HTMLInputElement {
   const browseFor: Record<string, string> =
-    kind === "files" ? { multiple: "" } : { webkitdirectory: "" };
+    kind === "files"
+      ? { multiple: "", accept: ACCEPTED_TYPES }
+      : { webkitdirectory: "" };
 
   return el("input", {
     class: "file-picker",

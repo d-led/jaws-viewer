@@ -26,6 +26,24 @@ function separationSlider(root: HTMLElement): HTMLInputElement {
 }
 
 describe("the viewer application", () => {
+  it("offers the kinds of file an export is made of in the dialog", () => {
+    const { root } = createTestApp();
+
+    const picker = root.querySelector<HTMLInputElement>(
+      'input[type="file"]:not([webkitdirectory])',
+    );
+
+    expect(picker?.accept.split(",")).toEqual(
+      expect.arrayContaining([
+        ".zip",
+        ".stl",
+        ".dentalProject",
+        ".matrix4",
+        ".xml",
+      ]),
+    );
+  });
+
   it("adds a layer for every scan in the bundle", async () => {
     const { app, viewport } = createTestApp();
 
