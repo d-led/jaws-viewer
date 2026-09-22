@@ -99,7 +99,8 @@ export function iconButton(
   const element = el("button", {
     ...spec,
     class: spec.class ?? "button button--icon",
-    title: label,
+    // The label is what a screen reader reads; the tooltip may say more.
+    title: spec.title ?? label,
     attrs: { type: "button", "aria-label": label, ...spec.attrs },
     on: { click: () => action(), ...spec.on },
   });

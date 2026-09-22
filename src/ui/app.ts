@@ -331,7 +331,8 @@ export function createApp(root: HTMLElement, options: AppOptions): App {
         ? [
             button("Open folder…", () => folderPicker.click(), {
               class: "button button--yellow",
-              title: "Choose the whole export folder",
+              title:
+                "Choose the whole export folder — a .zip goes through Open files…",
             }),
           ]
         : []),
@@ -352,6 +353,8 @@ export function createApp(root: HTMLElement, options: AppOptions): App {
       ? [
           iconButton("folder", "Open folder…", () => folderPicker.click(), {
             class: "button button--icon button--yellow",
+            title:
+              "Choose the whole export folder — a .zip goes through Open files…",
           }),
         ]
       : []),
@@ -489,7 +492,7 @@ function summarise(
 
   if (views.length === 0) {
     return problems.length === 0
-      ? "No scans found in that selection."
+      ? "No scans found in that selection. A .zip opens through Open files…, or by dropping it on the page."
       : `No scans found — ${problems.join(", ")}.`;
   }
 
