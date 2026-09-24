@@ -269,6 +269,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function clampUnit(value: number): number {
+/** A share of something — an opacity, an opening — held between none of it and all of it. */
+export function clampUnit(value: number): number {
   return Math.min(Math.max(value, 0), 1);
 }

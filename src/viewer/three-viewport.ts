@@ -1,7 +1,6 @@
 import {
   ACESFilmicToneMapping,
   Box3,
-  BufferAttribute,
   type BufferGeometry,
   Color,
   DirectionalLight,
@@ -23,83 +22,74 @@ import {
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { STLLoader } from "three/addons/loaders/STLLoader.js";
-import { WELD_FRACTION } from "../domain/curvature";
+import { WELD_FRACTION, type CurvatureKind } from "../domain/curvature";
 import { separationOffsets, type Bounds } from "../domain/explode";
 import type { Matrix4Entries } from "../domain/matrix4";
 import {
   DEFAULT_SMOOTHING,
   clampSmoothing,
+  clampUnit,
   type CameraView,
   type LayerSurface,
 } from "../domain/view-settings";
-import { assertNever, errorMessage } from "../support/errors";
+import { errorMessage } from "../support/errors";
+import {
+  DEFAULT_DIRECTION,
+  GRID_EXTENT_MM,
+  framingFor,
+  gridPlacementFor,
+  poseFor,
+  resizeFor,
+  visibleBoundsOf,
+  zoomLimitsFor,
+  type ViewSize,
+} from "./camera-framing";
+import { appearanceOf } from "./layer-appearance";
 import { layerPlacement } from "./layer-placement";
+import {
+  applySurfaceReply,
+  showOwnColour,
+  type SurfaceLayer,
+  type SurfaceMaterial,
+} from "./layer-surface";
 import {
   createSurfacePainter,
   replyFor,
+  type PaintRequest,
   type SurfaceEvent,
   type SurfacePainter,
-  type SurfaceReply,
 } from "./surface-painter";
 import { installTwoFingerScroll } from "./two-finger-scroll";
+import {
+  STATS_INTERVAL_SECONDS,
+  createStatsWindow,
+  visibleTrianglesOf,
+  type DrawnContent,
+} from "./viewport-stats";
 import type {
   AddLayerOutcome,
   LayerSpec,
   StandardView,
-  SurfaceState,
+  SurfaceProgress,
   Viewport,
   ViewportOptions,
-  ViewportStats,
 } from "./viewport";
 
 const BACKGROUND_COLOUR = 0x11151c;
 
-/** The grid is built once at this size and scaled to whatever is loaded. */
-const GRID_EXTENT_MM = 400;
 const GRID_DIVISIONS = 40;
 const GRID_COLOUR_LINES = 0x2b3340;
 const GRID_COLOUR_AXIS = 0x3d4a5c;
 
-/** Extra room left around the model when framing, as a multiple of the tight fit. */
-const FRAME_MARGIN = 1.15;
-const MIN_FRAME_EXTENT = 1;
-
 const SURFACE_ROUGHNESS = 0.5;
-const STATS_INTERVAL_SECONDS = 0.5;
 
-/** Scan space is Z-up, the convention intraoral and CAD exports share. */
-const VIEW_DIRECTIONS: Record<StandardView, readonly [number, number, number]> =
-  {
-    top: [0, 0, 1],
-    bottom: [0, 0, -1],
-    front: [0, -1, 0],
-    back: [0, 1, 0],
-    right: [1, 0, 0],
-    left: [-1, 0, 0],
-  };
-
-/** The view a freshly loaded bundle opens in: from the front, slightly above. */
-const DEFAULT_DIRECTION = new Vector3(0, -1, 0.35).normalize();
-
-/** Either the layer's own colour, lit like the rest of the scene, or the map itself, unlit. */
-type SurfaceMaterial = MeshStandardMaterial | MeshBasicMaterial;
-
-interface RenderedLayer {
-  readonly id: string;
-  readonly label: string;
-  readonly mesh: Mesh<BufferGeometry, SurfaceMaterial>;
-  readonly geometry: BufferGeometry;
-  /** The layer's own colour, lit and shaded like the rest of the scene. */
-  readonly material: MeshStandardMaterial;
-  /**
-   * The measured map, unlit.
-   *
-   * A curvature is a reading rather than a look, and a surface under this scene's lights comes
-   * back washed out whatever the ramp says: with the studio environment and a tone curve on top of
-   * it, the middle of the ramp prints as white and the ends as pastel. Unlit, the pixel is the
-   * value.
-   */
-  readonly measuredMaterial: MeshBasicMaterial;
+/**
+ * A layer as this viewport keeps it: what it is drawn with, and where it sits.
+ *
+ * How a surface is shown on it is `layer-surface`'s business, which is what the rest of these
+ * fields are declared for.
+ */
+interface RenderedLayer extends SurfaceLayer {
   /** The layer's own colour, kept while a curvature ramp is the thing on screen. */
   colour: string;
   readonly triangles: number;
@@ -110,11 +100,6 @@ interface RenderedLayer {
   visible: boolean;
   opacity: number;
   transform: Matrix4Entries | null;
-  /** What the surface is coloured by, and how hard the estimate is blurred before it is shown. */
-  surface: LayerSurface;
-  smoothing: number;
-  /** Whether the thread already holds this layer's geometry. */
-  measured: boolean;
 }
 
 /**
@@ -136,13 +121,11 @@ class ThreeViewport implements Viewport {
   private readonly timer = new Timer();
   private readonly options: ViewportOptions;
   private readonly painter: SurfacePainter = createSurfacePainter();
+  private readonly stats = createStatsWindow(STATS_INTERVAL_SECONDS);
 
   private isolatedId: string | null = null;
   private separationFactor = 0;
-  private framesSinceReport = 0;
-  private secondsSinceReport = 0;
-  private lastWidth = 0;
-  private lastHeight = 0;
+  private lastSize: ViewSize | null = null;
 
   constructor(canvas: HTMLCanvasElement, options: ViewportOptions = {}) {
     this.options = options;
@@ -291,7 +274,7 @@ class ThreeViewport implements Viewport {
 
   setLayerOpacity(id: string, opacity: number): void {
     const layer = this.layerFor(id);
-    layer.opacity = Math.min(Math.max(opacity, 0), 1);
+    layer.opacity = clampUnit(opacity);
     this.applyLayerState(layer);
   }
 
@@ -335,18 +318,14 @@ class ThreeViewport implements Viewport {
    * soloing a layer.
    */
   setSeparation(factor: number): void {
-    const wanted = Math.min(Math.max(factor, 0), 1);
+    const wanted = clampUnit(factor);
     if (wanted === this.separationFactor) return;
 
     this.separationFactor = wanted;
     for (const layer of this.layers.values()) {
       this.applyPlacement(layer);
     }
-
-    // Opening makes the assembly taller, so pull back to keep all of it in view. The grid is
-    // left alone: it is the fixed floor the parts are being lifted off.
-    const box = this.visibleBounds();
-    if (box !== null) this.frame(box, this.currentDirection());
+    this.pullBackToFit();
   }
 
   isolate(id: string | null): void {
@@ -357,7 +336,7 @@ class ThreeViewport implements Viewport {
   }
 
   fitAll(): void {
-    const box = this.visibleBounds();
+    const box = this.contentBounds();
     if (box === null) return;
 
     this.frame(box, this.currentDirection());
@@ -372,13 +351,11 @@ class ThreeViewport implements Viewport {
   }
 
   setView(view: StandardView): void {
-    const [x, y, z] = VIEW_DIRECTIONS[view];
-    // Looking straight down an axis needs a different up vector to stay well defined.
-    const isPlanView = view === "top" || view === "bottom";
-    this.camera.up.set(0, isPlanView ? 1 : 0, isPlanView ? 0 : 1);
+    const pose = poseFor(view);
+    this.camera.up.copy(pose.up);
 
-    const box = this.visibleBounds();
-    if (box !== null) this.frame(box, new Vector3(x, y, z));
+    const box = this.contentBounds();
+    if (box !== null) this.frame(box, pose.direction);
   }
 
   setGridVisible(visible: boolean): void {
@@ -395,7 +372,7 @@ class ThreeViewport implements Viewport {
     this.camera.position.set(...view.position);
     this.controls.target.set(...view.target);
 
-    const box = this.visibleBounds();
+    const box = this.contentBounds();
     if (box !== null) this.limitZoom(box);
     this.controls.update();
   }
@@ -464,15 +441,13 @@ class ThreeViewport implements Viewport {
 
   /** Folds the user's settings and any isolated layer into what the renderer sees. */
   private applyLayerState(layer: RenderedLayer): void {
-    const soloed = this.isolatedId === null || this.isolatedId === layer.id;
-    layer.mesh.visible = layer.visible && soloed;
+    const look = appearanceOf(layer, this.isolatedId);
+    layer.mesh.visible = look.visible;
 
     for (const material of [layer.material, layer.measuredMaterial]) {
       material.opacity = layer.opacity;
-      // See-through layers must not occlude each other, or the ones drawn first would
-      // punch holes in the ones behind them.
-      material.transparent = layer.opacity < 1;
-      material.depthWrite = layer.opacity >= 1;
+      material.transparent = look.transparent;
+      material.depthWrite = look.depthWrite;
     }
   }
 
@@ -485,110 +460,83 @@ class ThreeViewport implements Viewport {
    * every toggle into a wait.
    */
   private refreshSurface(layer: RenderedLayer): void {
-    if (layer.surface === "colour") {
-      this.showOwnColour(layer);
-      return;
-    }
+    if (layer.surface === "colour") return showOwnColour(layer);
 
+    this.paint(layer, layer.surface);
+  }
+
+  private paint(layer: RenderedLayer, surface: CurvatureKind): void {
     const first = !layer.measured;
     layer.measured = true;
     this.painter.paint({
       id: layer.id,
-      surface: layer.surface,
+      surface,
       smoothing: layer.smoothing,
-      ...(first
-        ? {
-            geometry: {
-              positions: cornersOf(layer.geometry),
-              tolerance: toleranceOf(layer.bounds),
-            },
-          }
-        : {}),
+      ...this.geometryFor(layer, first),
     });
   }
 
-  /** Puts the layer back to its own colour, with nothing measured showing on it. */
-  private showOwnColour(layer: RenderedLayer): void {
-    layer.mesh.material = layer.material;
-    layer.geometry.deleteAttribute("color");
+  /** The geometry, on the one request that hands it over, and nothing on the ones that do not. */
+  private geometryFor(
+    layer: RenderedLayer,
+    first: boolean,
+  ): Pick<PaintRequest, "geometry"> {
+    if (!first) return {};
+
+    return {
+      geometry: {
+        positions: cornersOf(layer.geometry),
+        tolerance: toleranceOf(layer.bounds),
+      },
+    };
   }
 
-  /** Colours the layer's corners by what the thread measured, and shows them unlit. */
-  private showMeasured(layer: RenderedLayer, colours: Float32Array): void {
-    layer.geometry.setAttribute("color", new BufferAttribute(colours, 3));
-    layer.mesh.material = layer.measuredMaterial;
+  /** The box around what is on screen, which is what the camera is framed on. */
+  private contentBounds(): Box3 | null {
+    return visibleBoundsOf(this.content.children);
   }
 
-  private reportSurface(layer: RenderedLayer, state: SurfaceState): void {
-    const { onSurface } = this.options;
-    if (onSurface === undefined) return;
+  /**
+   * Pulls back to keep all of the assembly in view, without moving the grid.
+   *
+   * Opening it makes the assembly taller, so this is what a separation change ends with.
+   */
+  private pullBackToFit(): void {
+    const box = this.contentBounds();
+    if (box === null) return;
 
-    const named = { id: layer.id, label: layer.label };
-    switch (state.state) {
-      case "measuring":
-        onSurface({ ...named, state: "measuring" });
-        return;
-      case "painted":
-        onSurface({
-          ...named,
-          state: "painted",
-          milliseconds: state.milliseconds,
-          scalar: state.scalar,
-          range: state.range,
-        });
-        return;
-      case "failed":
-        onSurface({ ...named, state: "failed", reason: state.reason });
-        return;
-      default:
-        return assertNever(state);
-    }
-  }
-
-  private visibleBounds(): Box3 | null {
-    const box = new Box3();
-    for (const layer of this.layers.values()) {
-      if (layer.mesh.visible) box.expandByObject(layer.mesh);
-    }
-    return box.isEmpty() ? null : box;
+    this.frame(box, this.currentDirection());
   }
 
   private frame(box: Box3, direction: Vector3): void {
-    const size = box.getSize(new Vector3());
-    const centre = box.getCenter(new Vector3());
-    const extent = Math.max(size.x, size.y, size.z, MIN_FRAME_EXTENT);
-    const halfFov = (this.camera.fov * Math.PI) / 360;
-    const fitHeight = extent / 2 / Math.tan(halfFov);
-    const fitWidth = fitHeight / Math.max(this.camera.aspect, 0.1);
-    const distance = FRAME_MARGIN * Math.max(fitHeight, fitWidth);
+    const framing = framingFor({
+      bounds: box,
+      fov: this.camera.fov,
+      aspect: this.camera.aspect,
+      direction,
+    });
 
-    this.camera.position
-      .copy(centre)
-      .addScaledVector(direction.clone().normalize(), distance);
-    this.camera.near = Math.max(distance / 100, 0.01);
-    this.camera.far = distance * 100;
+    this.camera.position.copy(framing.position);
+    this.camera.near = framing.near;
+    this.camera.far = framing.far;
     this.camera.updateProjectionMatrix();
 
-    this.controls.target.copy(centre);
-    this.limitZoom(box);
+    this.controls.target.copy(framing.target);
+    this.controls.minDistance = framing.minDistance;
+    this.controls.maxDistance = framing.maxDistance;
     this.controls.update();
   }
 
   private limitZoom(box: Box3): void {
-    const size = box.getSize(new Vector3());
-    const extent = Math.max(size.x, size.y, size.z, MIN_FRAME_EXTENT);
-
-    this.controls.minDistance = extent / 100;
-    this.controls.maxDistance = extent * 100;
+    const limits = zoomLimitsFor(box);
+    this.controls.minDistance = limits.minDistance;
+    this.controls.maxDistance = limits.maxDistance;
   }
 
   private syncGrid(box: Box3): void {
-    const size = box.getSize(new Vector3());
-    const centre = box.getCenter(new Vector3());
-    const scale = Math.max(size.x, size.y, MIN_FRAME_EXTENT) / GRID_EXTENT_MM;
-
-    this.grid.scale.setScalar(scale);
-    this.grid.position.set(centre.x, centre.y, box.min.z);
+    const placement = gridPlacementFor(box);
+    this.grid.scale.setScalar(placement.scale);
+    this.grid.position.copy(placement.position);
   }
 
   private currentDirection(): Vector3 {
@@ -598,25 +546,17 @@ class ThreeViewport implements Viewport {
       : direction.normalize();
   }
 
-  private visibleTriangleCount(): number {
-    let total = 0;
-    for (const layer of this.layers.values()) {
-      if (layer.mesh.visible) total += layer.triangles;
-    }
-    return total;
-  }
-
   private readonly handleResize = (): void => {
-    const width = this.renderer.domElement.clientWidth;
-    const height = this.renderer.domElement.clientHeight;
-    if (width === 0 || height === 0) return;
-    // Resizing reallocates the drawing buffer, so only do it when the size really changed.
-    if (width === this.lastWidth && height === this.lastHeight) return;
-    this.lastWidth = width;
-    this.lastHeight = height;
+    const size = resizeFor({
+      width: this.renderer.domElement.clientWidth,
+      height: this.renderer.domElement.clientHeight,
+      previous: this.lastSize,
+    });
+    if (size === null) return;
 
-    this.renderer.setSize(width, height, false);
-    this.camera.aspect = width / height;
+    this.lastSize = size;
+    this.renderer.setSize(size.width, size.height, false);
+    this.camera.aspect = size.aspect;
     this.camera.updateProjectionMatrix();
   };
 
@@ -632,40 +572,15 @@ class ThreeViewport implements Viewport {
    */
   private readonly handleSurface = (event: SurfaceEvent): void => {
     const layer = this.layers.get(event.id);
-    if (layer !== undefined) {
-      this.applySurfaceReply(layer, replyFor(event, layer));
-    }
+    if (layer === undefined) return;
+
+    applySurfaceReply(layer, replyFor(event, layer), this.tell);
   };
 
-  private applySurfaceReply(layer: RenderedLayer, reply: SurfaceReply): void {
-    switch (reply.kind) {
-      case "ignore":
-        return;
-      case "measuring":
-        this.reportSurface(layer, { state: "measuring" });
-        return;
-      case "measured":
-        this.showMeasured(layer, reply.colours);
-        this.reportSurface(layer, {
-          state: "painted",
-          milliseconds: reply.milliseconds,
-          scalar: reply.surface,
-          range: reply.range,
-        });
-        return;
-      case "failed":
-        // Nothing is on screen for this scalar, so the layer goes back to its own colour rather
-        // than being left as it was mid-request, and another attempt is allowed to send the
-        // geometry again. What the layer is asking for is left alone: the user asked for it, and
-        // the status line says why it is not there.
-        layer.measured = false;
-        this.showOwnColour(layer);
-        this.reportSurface(layer, { state: "failed", reason: reply.reason });
-        return;
-      default:
-        assertNever(reply);
-    }
-  }
+  /** Says how a layer's surfacing is going, when there is anyone to say it to. */
+  private readonly tell = (progress: SurfaceProgress): void => {
+    this.options.onSurface?.(progress);
+  };
 
   private readonly render = (timestamp: number): void => {
     this.timer.update(timestamp);
@@ -676,21 +591,16 @@ class ThreeViewport implements Viewport {
   };
 
   private reportStats(elapsed: number): void {
-    const { onStats } = this.options;
-    if (onStats === undefined) return;
+    const stats = this.stats.add(elapsed, () => this.drawnContent());
+    if (stats !== null) this.options.onStats?.(stats);
+  }
 
-    this.framesSinceReport += 1;
-    this.secondsSinceReport += elapsed;
-    if (this.secondsSinceReport < STATS_INTERVAL_SECONDS) return;
-
-    const stats: ViewportStats = {
-      fps: Math.round(this.framesSinceReport / this.secondsSinceReport),
-      visibleTriangles: this.visibleTriangleCount(),
+  /** What a reading says about the work, read only on the frames a reading is due. */
+  private drawnContent(): DrawnContent {
+    return {
+      visibleTriangles: visibleTrianglesOf(this.layers.values()),
       drawCalls: this.renderer.info.render.calls,
     };
-    this.framesSinceReport = 0;
-    this.secondsSinceReport = 0;
-    onStats(stats);
   }
 }
 
