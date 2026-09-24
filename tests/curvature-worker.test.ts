@@ -107,6 +107,13 @@ function painted(worker: RunningWorker): Painted {
   return reply;
 }
 
+/** Why the worker gave up, which is the one thing a failure says. */
+function failedReason(worker: RunningWorker): string {
+  const reply = worker.posted.at(-1);
+  if (reply?.type !== "failed") throw new Error("The worker did not fail.");
+  return reply.reason;
+}
+
 function replyTypes(worker: RunningWorker): string[] {
   return worker.posted.map((message) => message.type);
 }
@@ -169,13 +176,9 @@ describe("the curvature worker", () => {
 
     worker.send(paintRequest({}));
 
-    expect(worker.posted).toEqual([
-      {
-        type: "failed",
-        id: LAYER,
-        reason: expect.stringContaining("not been measured"),
-      },
-    ]);
+    expect(worker.posted).toHaveLength(1);
+    expect(worker.posted[0]).toMatchObject({ type: "failed", id: LAYER });
+    expect(failedReason(worker)).toContain("not been measured");
   });
 
   it("hands the colours over rather than copying them", async () => {
