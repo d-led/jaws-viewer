@@ -13,7 +13,40 @@ import {
 
 const EXPORT_FILES = exportFiles();
 
+/** Which of the solo buttons are pressed, in the order the layers are shown. */
+function soloPressed(root: HTMLElement): string[] {
+  return [...root.querySelectorAll(".layer__solo")].map(
+    (button) => button.getAttribute("aria-pressed") ?? "",
+  );
+}
+
 describe("keeping a session for the next visit", () => {
+  it("brings back the layer that was left on its own", async () => {
+    const { app, viewport, store, root } = createTestApp();
+    store.files = exportBundleFiles();
+    store.view = {
+      separation: 0,
+      layers: {},
+      isolated: LAYER_IDS.lower,
+    };
+
+    await app.restore();
+
+    expect(viewport.isolated).toBe(LAYER_IDS.lower);
+    expect(soloPressed(root)).toEqual(["false", "true", "false"]);
+  });
+
+  it("leaves every layer showing when no solo was left behind", async () => {
+    const { app, viewport, store, root } = createTestApp();
+    store.files = exportBundleFiles();
+    store.view = { separation: 0, layers: {} };
+
+    await app.restore();
+
+    expect(viewport.isolated).toBeNull();
+    expect(soloPressed(root)).toEqual(["false", "false", "false"]);
+  });
+
   it("brings back the bundle that was open last time", async () => {
     const { app, viewport, store, root } = createTestApp();
     store.files = exportBundleFiles();

@@ -52,6 +52,8 @@ describe("the stored files", () => {
     ]);
   });
 
+  // A real mesh's worth of bytes through IndexedDB, which is slow enough under the coverage build
+  // to need more room than the default five seconds.
   it("keep mesh bytes intact, all the way back", async () => {
     const stl = binaryStl(4711);
     await store.saveFiles([{ path: "Case-UpperJaw.stl", bytes: stl }]);
@@ -60,7 +62,7 @@ describe("the stored files", () => {
     expect(restored.bytes).toEqual(stl);
     expect(sniffBundleFile(restored.bytes)).toBe("binary-stl");
     expect(readStlTriangleCount(restored.bytes, "binary-stl")).toBe(4711);
-  });
+  }, 30_000);
 
   it("are replaced rather than added to", async () => {
     await store.saveFiles([{ path: "first.stl", bytes: binaryStl(1) }]);

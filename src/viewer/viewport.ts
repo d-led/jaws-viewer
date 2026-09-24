@@ -1,5 +1,6 @@
+import type { CurvatureKind, Range } from "../domain/curvature";
 import type { Matrix4Entries } from "../domain/matrix4";
-import type { CameraView } from "../domain/view-settings";
+import type { CameraView, LayerSurface } from "../domain/view-settings";
 
 /** Orthographic directions the camera can snap to. Assumes a Z-up scan space. */
 export type StandardView =
@@ -26,7 +27,27 @@ export interface ViewportOptions {
   readonly onStats?: (stats: ViewportStats) => void;
   /** Called when the camera settles, so where it ended up can be remembered. */
   readonly onCameraSettled?: () => void;
+  /** Called as a layer's surface is measured and coloured. */
+  readonly onSurface?: (progress: SurfaceProgress) => void;
 }
+
+/** What a layer's surfacing is doing, apart from which layer it is doing it to. */
+export type SurfaceState =
+  | { readonly state: "measuring" }
+  | {
+      readonly state: "painted";
+      readonly milliseconds: number;
+      /** Which scalar was measured, and over what range of it the colours were spread. */
+      readonly scalar: CurvatureKind;
+      readonly range: Range;
+    }
+  | { readonly state: "failed"; readonly reason: string };
+
+/** What a layer's surfacing is doing, for the status line. */
+export type SurfaceProgress = SurfaceState & {
+  readonly id: string;
+  readonly label: string;
+};
 
 /**
  * The 3D surface the UI drives.
@@ -44,6 +65,10 @@ export interface Viewport {
   setLayerColour(id: string, colour: string): void;
   /** Places the layer with the export's `.matrix4` transform, or leaves it in scan space. */
   setLayerTransform(id: string, transform: Matrix4Entries | null): void;
+  /** Colours the layer by its own colour, or by a scalar measured from its surface. */
+  setLayerSurface(id: string, surface: LayerSurface): void;
+  /** One-ring passes the curvature estimate is blurred by, 0 to `MAX_SMOOTHING`. */
+  setLayerSmoothing(id: string, smoothing: number): void;
 
   /** Shows `id` on its own, or restores every layer the user left visible when given `null`. */
   isolate(id: string | null): void;

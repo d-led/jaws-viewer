@@ -5,7 +5,10 @@ import {
   createTestApp,
   exportFiles,
   fileFrom,
+  smoothingSlider,
   statusText,
+  surfaceSelect,
+  LAYER_IDS,
 } from "./app-harness";
 
 const EXPORT_FILES = exportFiles();
@@ -23,6 +26,13 @@ function separationSlider(root: HTMLElement): HTMLInputElement {
   const slider = root.querySelector<HTMLInputElement>(".separation__slider");
   if (slider === null) throw new Error("Expected a separation slider.");
   return slider;
+}
+
+/** The colour scale beside a layer's surface control. */
+function surfaceLegend(root: HTMLElement, index: number): HTMLElement {
+  const legend = root.querySelectorAll<HTMLElement>(".layer__legend")[index];
+  if (legend === undefined) throw new Error(`No legend at index ${index}.`);
+  return legend;
 }
 
 describe("the viewer application", () => {
@@ -207,5 +217,144 @@ describe("the viewer application", () => {
     await app.loadFromDrop(transfer);
 
     expect(viewport.layers).toHaveLength(3);
+  });
+
+  it("asks the surface for the scalar a layer is being shown by", async () => {
+    const { app, root, viewport } = createTestApp();
+    await app.loadFiles(EXPORT_FILES);
+    viewport.surfaceChanges.length = 0;
+
+    const select = surfaceSelect(root, 0);
+    select.value = "sharpness";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+
+    // Every layer is told what to show, so the ones that were left alone keep their own colour.
+    expect(viewport.surfaceChanges).toContainEqual({
+      id: LAYER_IDS.upper,
+      surface: "sharpness",
+    });
+    expect(viewport.surfaceChanges).toContainEqual({
+      id: LAYER_IDS.lower,
+      surface: "colour",
+    });
+  });
+
+  it("asks the surface how hard to smooth a curvature", async () => {
+    const { app, root, viewport } = createTestApp();
+    await app.loadFiles(EXPORT_FILES);
+    viewport.smoothingChanges.length = 0;
+
+    const slider = smoothingSlider(root, 0);
+    slider.value = "5";
+    slider.dispatchEvent(new Event("input", { bubbles: true }));
+
+    expect(viewport.smoothingChanges).toContainEqual({
+      id: LAYER_IDS.upper,
+      smoothing: 5,
+    });
+  });
+
+  it("keeps the grid switched off when another bundle is loaded", async () => {
+    const { app, root, viewport } = createTestApp();
+    await app.loadFiles(EXPORT_FILES);
+
+    const grid = root.querySelector<HTMLInputElement>(".layer--helper input");
+    if (grid === null) throw new Error("Expected a grid switch.");
+    grid.checked = false;
+    grid.dispatchEvent(new Event("change", { bubbles: true }));
+
+    await app.loadFiles(EXPORT_FILES);
+
+    expect(viewport.gridVisible).toBe(false);
+  });
+
+  it("keeps the layer the user left on its own", async () => {
+    const { app, root, viewport, store } = createTestApp();
+    await app.loadFiles(EXPORT_FILES);
+
+    const solo = root.querySelectorAll<HTMLButtonElement>(".layer__solo")[1];
+    solo?.click();
+
+    expect(viewport.isolated).toBe(LAYER_IDS.lower);
+    expect(store.view?.isolated).toBe(LAYER_IDS.lower);
+  });
+
+  it("says what the surfacing is doing", () => {
+    const harness = createTestApp();
+
+    harness.reportSurface({
+      id: LAYER_IDS.upper,
+      label: "Upper Jaw",
+      state: "measuring",
+    });
+    expect(statusText(harness.root)).toContain(
+      "Measuring the surface of Upper Jaw",
+    );
+
+    harness.reportSurface({
+      id: LAYER_IDS.upper,
+      label: "Upper Jaw",
+      state: "painted",
+      milliseconds: 750,
+      scalar: "mean",
+      range: { min: -0.4, max: 0.4 },
+    });
+    expect(statusText(harness.root)).toContain("curvature ready in 0.8 s");
+  });
+
+  it("says what the colours on a layer mean, once it has measured them", async () => {
+    const harness = createTestApp();
+    await harness.app.loadFiles(EXPORT_FILES);
+
+    harness.reportSurface({
+      id: LAYER_IDS.upper,
+      label: "Upper Jaw",
+      state: "painted",
+      milliseconds: 750,
+      scalar: "mean",
+      range: { min: -0.42, max: 0.42 },
+    });
+
+    const legend = surfaceLegend(harness.root, 0);
+    expect(legend.hidden).toBe(false);
+    expect(legend.textContent).toContain("0.42");
+    expect(legend.textContent).toContain("1/mm");
+  });
+
+  it("takes the legend away when a layer goes back to its own colour", async () => {
+    const harness = createTestApp();
+    await harness.app.loadFiles(EXPORT_FILES);
+    harness.reportSurface({
+      id: LAYER_IDS.upper,
+      label: "Upper Jaw",
+      state: "painted",
+      milliseconds: 750,
+      scalar: "mean",
+      range: { min: -0.42, max: 0.42 },
+    });
+
+    const select = surfaceSelect(harness.root, 0);
+    select.value = "colour";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+
+    expect(surfaceLegend(harness.root, 0).hidden).toBe(true);
+  });
+
+  it("says so when a surface could not be measured", () => {
+    const harness = createTestApp();
+
+    harness.reportSurface({
+      id: LAYER_IDS.upper,
+      label: "Upper Jaw",
+      state: "failed",
+      reason: "the measuring worker stopped",
+    });
+
+    expect(statusText(harness.root)).toContain(
+      "Upper Jaw: the measuring worker stopped",
+    );
+    expect(
+      harness.root.querySelector(".status")?.getAttribute("data-tone"),
+    ).toBe("error");
   });
 });

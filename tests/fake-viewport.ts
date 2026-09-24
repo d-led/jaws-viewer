@@ -1,5 +1,5 @@
 import type { Matrix4Entries } from "../src/domain/matrix4";
-import type { CameraView } from "../src/domain/view-settings";
+import type { CameraView, LayerSurface } from "../src/domain/view-settings";
 import type { ViewController } from "../src/ui/view-controller";
 import type {
   AddLayerOutcome,
@@ -17,6 +17,8 @@ export class FakeViewport implements Viewport, ViewController {
   readonly visibilityChanges: Array<{ id: string; visible: boolean }> = [];
   readonly opacityChanges: Array<{ id: string; opacity: number }> = [];
   readonly colourChanges: Array<{ id: string; colour: string }> = [];
+  readonly surfaceChanges: Array<{ id: string; surface: LayerSurface }> = [];
+  readonly smoothingChanges: Array<{ id: string; smoothing: number }> = [];
   readonly placementChanges: Array<{ id: string; placed: boolean }> = [];
   readonly transformChanges: Array<{
     id: string;
@@ -59,6 +61,14 @@ export class FakeViewport implements Viewport, ViewController {
 
   setLayerColour(id: string, colour: string): void {
     this.colourChanges.push({ id, colour });
+  }
+
+  setLayerSurface(id: string, surface: LayerSurface): void {
+    this.surfaceChanges.push({ id, surface });
+  }
+
+  setLayerSmoothing(id: string, smoothing: number): void {
+    this.smoothingChanges.push({ id, smoothing });
   }
 
   setLayerTransform(id: string, transform: Matrix4Entries | null): void {

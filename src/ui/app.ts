@@ -5,9 +5,13 @@ import {
   EMPTY_VIEW_SETTINGS,
   defaultLayerSettings,
   gridIsVisible,
+  isolatedOf,
   keepingLayers,
   layerSettingsIn,
+  smoothingOf,
+  surfaceOf,
   withGridVisible,
+  withIsolated,
   withLayerSettings,
   withSeparation,
   type LayerSettings,
@@ -18,9 +22,13 @@ import type { BundleFile } from "../io/bundle-file";
 import { readDroppedFiles, readFileList } from "../io/drop-reader";
 import { readSampleBundle } from "../io/sample-bundle";
 import type { SessionStore } from "../io/session-store";
-import { errorMessage } from "../support/errors";
+import { assertNever, errorMessage } from "../support/errors";
 import { formatCount } from "../support/format";
-import type { Viewport, ViewportOptions } from "../viewer/viewport";
+import type {
+  SurfaceProgress,
+  Viewport,
+  ViewportOptions,
+} from "../viewer/viewport";
 import { button, el, iconButton } from "./dom";
 import { installDropTarget } from "./drop-target";
 import { createImmersiveMode } from "./immersive";
@@ -74,6 +82,7 @@ export function createApp(root: HTMLElement, options: AppOptions): App {
     },
     // Orbiting changes nothing a control describes, so the camera has to say so itself.
     onCameraSettled: () => remember(),
+    onSurface: (progress) => reportSurface(progress),
   });
 
   /** How the bundle is being looked at — the one description the surface is driven from. */
@@ -88,7 +97,11 @@ export function createApp(root: HTMLElement, options: AppOptions): App {
       update(withLayerSettings(settings, id, { opacity })),
     setLayerColour: (id, colour) =>
       update(withLayerSettings(settings, id, { colour })),
-    isolate: (id) => viewport.isolate(id),
+    setLayerSurface: (id, surface) =>
+      update(withLayerSettings(settings, id, { surface })),
+    setLayerSmoothing: (id, smoothing) =>
+      update(withLayerSettings(settings, id, { smoothing })),
+    isolate: (id) => update(withIsolated(settings, id)),
     setLayerPlaced: (id, placed) =>
       update(withLayerSettings(settings, id, { placedByMatrix: placed })),
     setSeparation: (factor) => update(withSeparation(settings, factor)),
@@ -105,16 +118,57 @@ export function createApp(root: HTMLElement, options: AppOptions): App {
     status.dataset["tone"] = tone;
   }
 
+  /**
+   * Says what the surfacing is doing.
+   *
+   * Measuring a jaw takes long enough to be worth announcing, and re-colouring out of a measurement
+   * already taken is quick enough that the note is only a reassurance. This overwrites whatever the
+   * status line was saying, which is the point: a load summary has had its moment by the time
+   * anyone asks for a curvature.
+   */
+  function reportSurface(progress: SurfaceProgress): void {
+    switch (progress.state) {
+      case "measuring":
+        report(`Measuring the surface of ${progress.label}…`);
+        return;
+      case "failed":
+        layers.showLegend(progress.id, null);
+        report(`${progress.label}: ${progress.reason}`, "error");
+        return;
+      case "painted":
+        // What the colours on the model mean, beside the model. The range is the one the measuring
+        // chose, so the legend cannot disagree with the picture.
+        layers.showLegend(progress.id, {
+          scalar: progress.scalar,
+          ...progress.range,
+        });
+        report(
+          `${progress.label}: curvature ready in ${(progress.milliseconds / 1000).toFixed(1)} s`,
+        );
+        return;
+      default:
+        assertNever(progress);
+    }
+  }
+
   /** Pushes the settings at the 3D surface. */
   function applySettings(view: ViewSettings): void {
     for (const [id, layer] of Object.entries(view.layers)) {
+      const surface = surfaceOf(layer);
+
       viewport.setLayerVisible(id, layer.visible);
       viewport.setLayerOpacity(id, layer.opacity);
       viewport.setLayerColour(id, layer.colour);
       viewport.setLayerTransform(id, layer.placedByMatrix ? matrix : null);
+      viewport.setLayerSurface(id, surface);
+      viewport.setLayerSmoothing(id, smoothingOf(layer));
+
+      // A layer showing its own colour has no scale to explain.
+      if (surface === "colour") layers.showLegend(id, null);
     }
     viewport.setSeparation(view.separation);
     viewport.setGridVisible(gridIsVisible(view));
+    viewport.isolate(isolatedOf(view));
   }
 
   /**
@@ -195,7 +249,7 @@ export function createApp(root: HTMLElement, options: AppOptions): App {
     settings = keepingLayers(view, resolved);
     applySettings(settings);
 
-    layers.show(views, gridIsVisible(settings));
+    layers.show(views, gridIsVisible(settings), isolatedOf(settings));
     metadata.show(bundle, views.map(toMatrixTarget));
     separation.show(settings.separation);
 
@@ -217,7 +271,7 @@ export function createApp(root: HTMLElement, options: AppOptions): App {
     viewport.clearLayers();
     matrix = null;
     settings = EMPTY_VIEW_SETTINGS;
-    layers.show([], gridIsVisible(settings));
+    layers.show([], gridIsVisible(settings), isolatedOf(settings));
     metadata.show(EMPTY_BUNDLE, []);
     separation.show(0);
     empty.hidden = false;

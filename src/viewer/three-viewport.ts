@@ -1,6 +1,7 @@
 import {
   ACESFilmicToneMapping,
   Box3,
+  BufferAttribute,
   type BufferGeometry,
   Color,
   DirectionalLight,
@@ -9,6 +10,7 @@ import {
   Group,
   HemisphereLight,
   Mesh,
+  MeshBasicMaterial,
   MeshStandardMaterial,
   PerspectiveCamera,
   PMREMGenerator,
@@ -21,16 +23,30 @@ import {
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { STLLoader } from "three/addons/loaders/STLLoader.js";
+import { WELD_FRACTION } from "../domain/curvature";
 import { separationOffsets, type Bounds } from "../domain/explode";
 import type { Matrix4Entries } from "../domain/matrix4";
-import type { CameraView } from "../domain/view-settings";
-import { errorMessage } from "../support/errors";
+import {
+  DEFAULT_SMOOTHING,
+  clampSmoothing,
+  type CameraView,
+  type LayerSurface,
+} from "../domain/view-settings";
+import { assertNever, errorMessage } from "../support/errors";
 import { layerPlacement } from "./layer-placement";
+import {
+  createSurfacePainter,
+  replyFor,
+  type SurfaceEvent,
+  type SurfacePainter,
+  type SurfaceReply,
+} from "./surface-painter";
 import { installTwoFingerScroll } from "./two-finger-scroll";
 import type {
   AddLayerOutcome,
   LayerSpec,
   StandardView,
+  SurfaceState,
   Viewport,
   ViewportOptions,
   ViewportStats,
@@ -65,11 +81,27 @@ const VIEW_DIRECTIONS: Record<StandardView, readonly [number, number, number]> =
 /** The view a freshly loaded bundle opens in: from the front, slightly above. */
 const DEFAULT_DIRECTION = new Vector3(0, -1, 0.35).normalize();
 
+/** Either the layer's own colour, lit like the rest of the scene, or the map itself, unlit. */
+type SurfaceMaterial = MeshStandardMaterial | MeshBasicMaterial;
+
 interface RenderedLayer {
   readonly id: string;
-  readonly mesh: Mesh<BufferGeometry, MeshStandardMaterial>;
+  readonly label: string;
+  readonly mesh: Mesh<BufferGeometry, SurfaceMaterial>;
   readonly geometry: BufferGeometry;
+  /** The layer's own colour, lit and shaded like the rest of the scene. */
   readonly material: MeshStandardMaterial;
+  /**
+   * The measured map, unlit.
+   *
+   * A curvature is a reading rather than a look, and a surface under this scene's lights comes
+   * back washed out whatever the ramp says: with the studio environment and a tone curve on top of
+   * it, the middle of the ramp prints as white and the ends as pastel. Unlit, the pixel is the
+   * value.
+   */
+  readonly measuredMaterial: MeshBasicMaterial;
+  /** The layer's own colour, kept while a curvature ramp is the thing on screen. */
+  colour: string;
   readonly triangles: number;
   readonly bounds: Bounds;
   /** Distance along the occlusal axis at full separation, taken from the scan geometry. */
@@ -78,6 +110,11 @@ interface RenderedLayer {
   visible: boolean;
   opacity: number;
   transform: Matrix4Entries | null;
+  /** What the surface is coloured by, and how hard the estimate is blurred before it is shown. */
+  surface: LayerSurface;
+  smoothing: number;
+  /** Whether the thread already holds this layer's geometry. */
+  measured: boolean;
 }
 
 /**
@@ -98,6 +135,7 @@ class ThreeViewport implements Viewport {
   private readonly loader = new STLLoader();
   private readonly timer = new Timer();
   private readonly options: ViewportOptions;
+  private readonly painter: SurfacePainter = createSurfacePainter();
 
   private isolatedId: string | null = null;
   private separationFactor = 0;
@@ -159,6 +197,9 @@ class ThreeViewport implements Viewport {
     this.resizeObserver.observe(canvas);
     this.handleResize();
 
+    // Curvature is measured off the main thread; what comes back is turned into colours here.
+    this.painter.onEvent(this.handleSurface);
+
     this.renderer.setAnimationLoop(this.render);
   }
 
@@ -190,22 +231,40 @@ class ThreeViewport implements Viewport {
       side: DoubleSide,
     });
 
-    const mesh = new Mesh(geometry, material);
+    // White on its own, because the ramp that arrives in the vertex colours is the reading.
+    const measuredMaterial = new MeshBasicMaterial({
+      vertexColors: true,
+      // The ramp was chosen by what it looks like on a screen, and a tone curve would print it as
+      // something else again.
+      toneMapped: false,
+      side: DoubleSide,
+    });
+
+    const mesh: Mesh<BufferGeometry, SurfaceMaterial> = new Mesh(
+      geometry,
+      material,
+    );
     mesh.name = spec.label;
     // Placement is composed by hand, so three must not overwrite it each frame.
     mesh.matrixAutoUpdate = false;
 
     return {
       id: spec.id,
+      label: spec.label,
+      colour: spec.colour,
       mesh,
       geometry,
       material,
+      measuredMaterial,
       triangles: triangleCountOf(geometry),
       bounds: boundsOf(geometry),
       separationOffset: 0,
       visible: true,
       opacity: 1,
       transform: null,
+      surface: "colour",
+      smoothing: DEFAULT_SMOOTHING,
+      measured: false,
     };
   }
 
@@ -214,9 +273,14 @@ class ThreeViewport implements Viewport {
       this.content.remove(layer.mesh);
       layer.geometry.dispose();
       layer.material.dispose();
+      layer.measuredMaterial.dispose();
     }
     this.layers.clear();
     this.isolatedId = null;
+
+    // Whatever the thread was measuring was measured from meshes that no longer exist, and a new
+    // bundle's layers can reuse the same ids, so its work is stopped rather than inherited.
+    this.painter.discard();
   }
 
   setLayerVisible(id: string, visible: boolean): void {
@@ -232,7 +296,11 @@ class ThreeViewport implements Viewport {
   }
 
   setLayerColour(id: string, colour: string): void {
-    this.layerFor(id).material.color.set(colour);
+    const layer = this.layerFor(id);
+    layer.colour = colour;
+    // The map is shown through its own material, so this is ready for whenever the layer's own
+    // colour is back on screen.
+    layer.material.color.set(colour);
   }
 
   setLayerTransform(id: string, transform: Matrix4Entries | null): void {
@@ -241,8 +309,36 @@ class ThreeViewport implements Viewport {
     this.applyPlacement(layer);
   }
 
+  setLayerSurface(id: string, surface: LayerSurface): void {
+    const layer = this.layerFor(id);
+    if (layer.surface === surface) return;
+
+    layer.surface = surface;
+    this.refreshSurface(layer);
+  }
+
+  setLayerSmoothing(id: string, smoothing: number): void {
+    const layer = this.layerFor(id);
+    const passes = clampSmoothing(smoothing);
+    if (layer.smoothing === passes) return;
+
+    layer.smoothing = passes;
+    this.refreshSurface(layer);
+  }
+
+  /**
+   * Spreads the layers apart, and pulls the camera back with them when they open.
+   *
+   * Being asked for the separation the layers already have is not a request to reframe: every
+   * settings change comes through here, so reframing on each one would throw away a zoom or a pan
+   * as soon as the user touched anything — switching the surface, moving an opacity slider,
+   * soloing a layer.
+   */
   setSeparation(factor: number): void {
-    this.separationFactor = Math.min(Math.max(factor, 0), 1);
+    const wanted = Math.min(Math.max(factor, 0), 1);
+    if (wanted === this.separationFactor) return;
+
+    this.separationFactor = wanted;
     for (const layer of this.layers.values()) {
       this.applyPlacement(layer);
     }
@@ -310,6 +406,7 @@ class ThreeViewport implements Viewport {
     this.resizeObserver.disconnect();
     this.controls.removeEventListener("end", this.handleCameraSettled);
     this.clearLayers();
+    this.painter.dispose();
     this.grid.geometry.dispose();
     this.grid.material.dispose();
     this.roomEnvironment.dispose();
@@ -370,11 +467,82 @@ class ThreeViewport implements Viewport {
     const soloed = this.isolatedId === null || this.isolatedId === layer.id;
     layer.mesh.visible = layer.visible && soloed;
 
-    layer.material.opacity = layer.opacity;
-    // See-through layers must not occlude each other, or the ones drawn first would
-    // punch holes in the ones behind them.
-    layer.material.transparent = layer.opacity < 1;
-    layer.material.depthWrite = layer.opacity >= 1;
+    for (const material of [layer.material, layer.measuredMaterial]) {
+      material.opacity = layer.opacity;
+      // See-through layers must not occlude each other, or the ones drawn first would
+      // punch holes in the ones behind them.
+      material.transparent = layer.opacity < 1;
+      material.depthWrite = layer.opacity >= 1;
+    }
+  }
+
+  /**
+   * Asks for the layer's corners to be coloured by its surface, or puts its own colour back.
+   *
+   * The geometry goes to the thread the first time and is kept there, so changing the scalar — and
+   * switching back to plain colour — costs no measuring at all. The measurement is deliberately
+   * not thrown away when colour is shown again: a jaw is big enough that letting it go would turn
+   * every toggle into a wait.
+   */
+  private refreshSurface(layer: RenderedLayer): void {
+    if (layer.surface === "colour") {
+      this.showOwnColour(layer);
+      return;
+    }
+
+    const first = !layer.measured;
+    layer.measured = true;
+    this.painter.paint({
+      id: layer.id,
+      surface: layer.surface,
+      smoothing: layer.smoothing,
+      ...(first
+        ? {
+            geometry: {
+              positions: cornersOf(layer.geometry),
+              tolerance: toleranceOf(layer.bounds),
+            },
+          }
+        : {}),
+    });
+  }
+
+  /** Puts the layer back to its own colour, with nothing measured showing on it. */
+  private showOwnColour(layer: RenderedLayer): void {
+    layer.mesh.material = layer.material;
+    layer.geometry.deleteAttribute("color");
+  }
+
+  /** Colours the layer's corners by what the thread measured, and shows them unlit. */
+  private showMeasured(layer: RenderedLayer, colours: Float32Array): void {
+    layer.geometry.setAttribute("color", new BufferAttribute(colours, 3));
+    layer.mesh.material = layer.measuredMaterial;
+  }
+
+  private reportSurface(layer: RenderedLayer, state: SurfaceState): void {
+    const { onSurface } = this.options;
+    if (onSurface === undefined) return;
+
+    const named = { id: layer.id, label: layer.label };
+    switch (state.state) {
+      case "measuring":
+        onSurface({ ...named, state: "measuring" });
+        return;
+      case "painted":
+        onSurface({
+          ...named,
+          state: "painted",
+          milliseconds: state.milliseconds,
+          scalar: state.scalar,
+          range: state.range,
+        });
+        return;
+      case "failed":
+        onSurface({ ...named, state: "failed", reason: state.reason });
+        return;
+      default:
+        return assertNever(state);
+    }
   }
 
   private visibleBounds(): Box3 | null {
@@ -456,6 +624,49 @@ class ThreeViewport implements Viewport {
     this.options.onCameraSettled?.();
   };
 
+  /**
+   * Takes the colours the thread measured, or gives up on them.
+   *
+   * A reply can arrive for a scalar the user has already moved on from; what to do about that is
+   * `replyFor`'s decision, and all that is left here is telling the renderer about it.
+   */
+  private readonly handleSurface = (event: SurfaceEvent): void => {
+    const layer = this.layers.get(event.id);
+    if (layer !== undefined) {
+      this.applySurfaceReply(layer, replyFor(event, layer));
+    }
+  };
+
+  private applySurfaceReply(layer: RenderedLayer, reply: SurfaceReply): void {
+    switch (reply.kind) {
+      case "ignore":
+        return;
+      case "measuring":
+        this.reportSurface(layer, { state: "measuring" });
+        return;
+      case "measured":
+        this.showMeasured(layer, reply.colours);
+        this.reportSurface(layer, {
+          state: "painted",
+          milliseconds: reply.milliseconds,
+          scalar: reply.surface,
+          range: reply.range,
+        });
+        return;
+      case "failed":
+        // Nothing is on screen for this scalar, so the layer goes back to its own colour rather
+        // than being left as it was mid-request, and another attempt is allowed to send the
+        // geometry again. What the layer is asking for is left alone: the user asked for it, and
+        // the status line says why it is not there.
+        layer.measured = false;
+        this.showOwnColour(layer);
+        this.reportSurface(layer, { state: "failed", reason: reply.reason });
+        return;
+      default:
+        assertNever(reply);
+    }
+  }
+
   private readonly render = (timestamp: number): void => {
     this.timer.update(timestamp);
     const elapsed = this.timer.getDelta();
@@ -503,4 +714,32 @@ function boundsOf(geometry: BufferGeometry): Bounds {
     min: [box.min.x, box.min.y, box.min.z],
     max: [box.max.x, box.max.y, box.max.z],
   };
+}
+
+/**
+ * The mesh's corners as a flat array, which is what the curvature fit welds into a surface.
+ *
+ * Read through the attribute rather than off its array, so nothing has to be assumed about how
+ * three is holding them — and copied, because the thread takes the buffer away with it.
+ */
+function cornersOf(geometry: BufferGeometry): Float32Array {
+  const attribute = geometry.getAttribute("position");
+  const corners = new Float32Array(attribute.count * 3);
+
+  for (let corner = 0; corner < attribute.count; corner += 1) {
+    corners[corner * 3] = attribute.getX(corner);
+    corners[corner * 3 + 1] = attribute.getY(corner);
+    corners[corner * 3 + 2] = attribute.getZ(corner);
+  }
+  return corners;
+}
+
+/** How far apart two corners can be and still have been the same point to the scanner. */
+function toleranceOf(bounds: Bounds): number {
+  const span = Math.hypot(
+    bounds.max[0] - bounds.min[0],
+    bounds.max[1] - bounds.min[1],
+    bounds.max[2] - bounds.min[2],
+  );
+  return span * WELD_FRACTION;
 }

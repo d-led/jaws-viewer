@@ -1,6 +1,9 @@
 // @vitest-environment happy-dom
 import { describe, expect, it } from "vitest";
-import type { LayerSettings } from "../src/domain/view-settings";
+import {
+  LAYER_SURFACES,
+  type LayerSettings,
+} from "../src/domain/view-settings";
 import { createLayersPanel, type LayerView } from "../src/ui/layers-panel";
 import { FakeViewport } from "./fake-viewport";
 
@@ -31,7 +34,7 @@ function layer(
 function panelWith(...layers: readonly LayerView[]) {
   const controller = new FakeViewport();
   const panel = createLayersPanel(controller);
-  panel.show(layers, true);
+  panel.show(layers, true, null);
   return { controller, panel, element: panel.element };
 }
 
@@ -51,6 +54,18 @@ function soloButtons(element: HTMLElement): HTMLButtonElement[] {
   return [...element.querySelectorAll<HTMLButtonElement>(".layer__solo")];
 }
 
+function surfaceSelects(element: HTMLElement): HTMLSelectElement[] {
+  return [...element.querySelectorAll<HTMLSelectElement>(".layer__surface")];
+}
+
+function smoothingRows(element: HTMLElement): HTMLElement[] {
+  return [...element.querySelectorAll<HTMLElement>(".layer__smoothing-row")];
+}
+
+function smoothingSliders(element: HTMLElement): HTMLInputElement[] {
+  return [...element.querySelectorAll<HTMLInputElement>(".layer__smoothing")];
+}
+
 function at<T>(items: readonly T[], index: number): T {
   const item = items[index];
   if (item === undefined)
@@ -66,6 +81,11 @@ function drag(slider: HTMLInputElement, percent: number): void {
 function toggle(box: HTMLInputElement, checked: boolean): void {
   box.checked = checked;
   box.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+function choose(select: HTMLSelectElement, value: string): void {
+  select.value = value;
+  select.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
 describe("the layers panel", () => {
@@ -178,19 +198,29 @@ describe("the layers panel", () => {
     ).toEqual(["false", "true"]);
   });
 
-  it("forgets any solo when the layers are shown again", () => {
+  it("shows the layer that was left on its own, when the layers are shown again", () => {
     const controller = new FakeViewport();
     const panel = createLayersPanel(controller);
-    panel.show(
-      [layer("upper", "Upper Jaw"), layer("lower", "Lower Jaw")],
-      true,
-    );
+    const jaws = [layer("upper", "Upper Jaw"), layer("lower", "Lower Jaw")];
+    panel.show(jaws, true, null);
+
+    panel.show(jaws, true, "lower");
+
+    expect(
+      soloButtons(panel.element).map((button) =>
+        button.getAttribute("aria-pressed"),
+      ),
+    ).toEqual(["false", "true"]);
+  });
+
+  it("shows no solo when nothing was left on its own", () => {
+    const controller = new FakeViewport();
+    const panel = createLayersPanel(controller);
+    const jaws = [layer("upper", "Upper Jaw"), layer("lower", "Lower Jaw")];
+    panel.show(jaws, true, null);
     at(soloButtons(panel.element), 0).click();
 
-    panel.show(
-      [layer("upper", "Upper Jaw"), layer("lower", "Lower Jaw")],
-      true,
-    );
+    panel.show(jaws, true, null);
 
     expect(
       soloButtons(panel.element).map((button) =>
@@ -212,5 +242,103 @@ describe("the layers panel", () => {
     grid.dispatchEvent(new Event("change", { bubbles: true }));
 
     expect(controller.gridVisible).toBe(false);
+  });
+});
+
+describe("the surface of a layer", () => {
+  it("offers a layer's own colour and every scalar it can be shown by", () => {
+    const { element } = panelWith(layer("upper", "Upper Jaw"));
+
+    expect(
+      [...at(surfaceSelects(element), 0).options].map((option) => option.value),
+    ).toEqual([...LAYER_SURFACES]);
+  });
+
+  it("shows the surface and the smoothing a layer is being looked at with", () => {
+    const { element } = panelWith(
+      layer("upper", "Upper Jaw", { surface: "sharpness", smoothing: 4 }),
+    );
+
+    expect(at(surfaceSelects(element), 0).value).toBe("sharpness");
+    expect(at(smoothingSliders(element), 0).value).toBe("4");
+    expect(element.textContent).toContain("4 passes");
+  });
+
+  it("reports the scalar the user picks", () => {
+    const { controller, element } = panelWith(layer("upper", "Upper Jaw"));
+
+    choose(at(surfaceSelects(element), 0), "mean");
+
+    expect(controller.surfaceChanges).toEqual([
+      { id: "upper", surface: "mean" },
+    ]);
+  });
+
+  it("reports how hard the curvature is smoothed", () => {
+    const { controller, element } = panelWith(
+      layer("upper", "Upper Jaw", { surface: "mean" }),
+    );
+
+    drag(at(smoothingSliders(element), 0), 5);
+
+    expect(controller.smoothingChanges).toEqual([
+      { id: "upper", smoothing: 5 },
+    ]);
+    expect(element.textContent).toContain("5 passes");
+  });
+
+  it("keeps the smoothing out of the way until a curvature is showing", () => {
+    const { element } = panelWith(layer("upper", "Upper Jaw"));
+
+    expect(at(smoothingRows(element), 0).hidden).toBe(true);
+  });
+
+  it("brings the smoothing out with a curvature, and puts it away again", () => {
+    const { element } = panelWith(layer("upper", "Upper Jaw"));
+    const select = at(surfaceSelects(element), 0);
+
+    choose(select, "sharpness");
+    expect(at(smoothingRows(element), 0).hidden).toBe(false);
+
+    choose(select, "colour");
+    expect(at(smoothingRows(element), 0).hidden).toBe(true);
+  });
+
+  it("reads out smoothing that is off", () => {
+    const { element } = panelWith(
+      layer("upper", "Upper Jaw", { surface: "mean", smoothing: 0 }),
+    );
+
+    expect(element.textContent).toContain("off");
+  });
+
+  it("explains what each way of surfacing a layer means", () => {
+    const { element } = panelWith(layer("upper", "Upper Jaw"));
+
+    const options = [...at(surfaceSelects(element), 0).options];
+    expect(options.map((option) => option.title.length > 30)).toEqual(
+      options.map(() => true),
+    );
+  });
+
+  it("says of sharpness that it is a difference, not the primary curvature", () => {
+    const { element } = panelWith(layer("upper", "Upper Jaw"));
+
+    const options = [...at(surfaceSelects(element), 0).options];
+    const sharpness = options.find((option) => option.value === "sharpness");
+
+    // Read as text because an option's `label` is the attribute, which is not set here.
+    expect(sharpness?.textContent).toContain("k₁ − k₂");
+    expect(sharpness?.title).toContain("Not k₁");
+  });
+
+  it("explains what the surface control is showing, and follows the choice", () => {
+    const { element } = panelWith(layer("upper", "Upper Jaw"));
+    const select = at(surfaceSelects(element), 0);
+    expect(select.title).toContain("own colour");
+
+    choose(select, "mean");
+
+    expect(select.title).toContain("averaged");
   });
 });

@@ -54,6 +54,28 @@ function storedOpacities(stored: unknown): number[] {
   });
 }
 
+/**
+ * How far the camera sits from what it is looking at, read out of a stored view.
+ *
+ * A reframe changes this before it changes anything else, and it is one number rather than six,
+ * which is all a test needs to say "the view was left alone". Nought when nothing is stored yet.
+ */
+function cameraDistance(stored: unknown): number {
+  if (!isRecord(stored)) return 0;
+
+  const { camera } = stored;
+  if (!isRecord(camera)) return 0;
+
+  const position = camera["position"];
+  const target = camera["target"];
+  if (!Array.isArray(position) || !Array.isArray(target)) return 0;
+
+  const distances = position.map((value, axis) => value - target[axis]);
+  if (distances.some((value) => typeof value !== "number")) return 0;
+
+  return Math.round(Math.hypot(...distances));
+}
+
 let bundle: SampleBundle;
 
 test.beforeAll(async () => {
@@ -178,6 +200,31 @@ test.describe("loading an export", () => {
     await page.getByRole("button", { name: "Top", exact: true }).click();
 
     await expect(page.locator("canvas")).toBeVisible();
+  });
+
+  test("leaves the view where the user put it when the surface changes", async ({
+    page,
+  }) => {
+    const canvas = await page.locator("canvas").boundingBox();
+    await page.mouse.move(
+      (canvas?.x ?? 0) + (canvas?.width ?? 0) / 2,
+      (canvas?.y ?? 0) + (canvas?.height ?? 0) / 2,
+    );
+
+    const framed = cameraDistance(await storedView(page));
+    expect(framed).toBeGreaterThan(0);
+
+    await page.mouse.wheel(0, -600);
+    await expect
+      .poll(async () => cameraDistance(await storedView(page)))
+      .not.toBe(framed);
+    const zoomed = cameraDistance(await storedView(page));
+
+    await page.locator(".layer__surface").first().selectOption("mean");
+    await expect(page.getByText(/curvature ready/)).toBeVisible();
+
+    // Switching the surface is no reason to pull the camera back: the zoom stays where it was.
+    expect(cameraDistance(await storedView(page))).toBe(zoomed);
   });
 });
 

@@ -63,6 +63,11 @@ export function inputValue(event: Event): string {
   return event.target instanceof HTMLInputElement ? event.target.value : "";
 }
 
+/** The chosen value of a `<select>`, or `""` when the event came from something else. */
+export function selectedValue(event: Event): string {
+  return event.target instanceof HTMLSelectElement ? event.target.value : "";
+}
+
 /**
  * Runs `action` on click, guarding against unhandled rejections.
  *

@@ -335,6 +335,76 @@ body {
   text-align: right;
 }
 
+.layer__surface-row,
+.layer__smoothing-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) 2.6rem;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* The smoothing control only applies to a curvature, and is hidden without one. `display: grid`
+   above would otherwise beat the browser's own rule for `[hidden]`. */
+.layer__smoothing-row[hidden] {
+  display: none;
+}
+
+.layer__surface {
+  width: 100%;
+  padding: 0.15rem 0.3rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.layer__smoothing {
+  width: 100%;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.layer__smoothing-value {
+  color: var(--text-muted);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.72rem;
+  text-align: right;
+}
+
+/* The scale the colours on the model mean. `display: flex` would otherwise beat the browser's own
+   rule for `[hidden]`, as it does on the smoothing row above. */
+.layer__legend {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.layer__legend[hidden] {
+  display: none;
+}
+
+.layer__legend-bar {
+  height: 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.layer__legend-ticks {
+  display: flex;
+  justify-content: space-between;
+  color: var(--text-muted);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.68rem;
+}
+
+.layer__legend-unit {
+  color: var(--text-muted);
+  font-size: 0.68rem;
+}
+
 .layer__meta {
   color: var(--text-muted);
   font-size: 0.72rem;

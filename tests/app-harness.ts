@@ -1,6 +1,7 @@
 import { createApp, type App } from "../src/ui/app";
 import type { BundleFile } from "../src/io/bundle-file";
 import type { CameraView } from "../src/domain/view-settings";
+import type { SurfaceProgress } from "../src/viewer/viewport";
 import {
   asciiStl,
   binaryStl,
@@ -64,6 +65,8 @@ export interface AppHarness {
   readonly root: HTMLElement;
   /** Simulates the viewport reporting that the camera has stopped moving. */
   settleCamera(view: CameraView): void;
+  /** Simulates the viewport reporting on a layer's surfacing. */
+  reportSurface(progress: SurfaceProgress): void;
 }
 
 export function createTestApp(): AppHarness {
@@ -73,9 +76,11 @@ export function createTestApp(): AppHarness {
   document.body.append(root);
 
   let cameraSettled: (() => void) | undefined;
+  let surface: ((progress: SurfaceProgress) => void) | undefined;
   const app = createApp(root, {
     createViewport: (_canvas, options) => {
       cameraSettled = options.onCameraSettled;
+      surface = options.onSurface;
       return viewport;
     },
     store,
@@ -89,6 +94,9 @@ export function createTestApp(): AppHarness {
     settleCamera(camera) {
       viewport.setCamera(camera);
       cameraSettled?.();
+    },
+    reportSurface(progress) {
+      surface?.(progress);
     },
   };
 }
@@ -115,5 +123,27 @@ export function opacitySlider(
 export function separationSlider(root: HTMLElement): HTMLInputElement {
   const slider = root.querySelector<HTMLInputElement>(".separation__slider");
   if (slider === null) throw new Error("Expected a separation slider.");
+  return slider;
+}
+
+export function surfaceSelect(
+  root: HTMLElement,
+  index: number,
+): HTMLSelectElement {
+  const select =
+    root.querySelectorAll<HTMLSelectElement>(".layer__surface")[index];
+  if (select === undefined)
+    throw new Error(`No surface select at index ${index}.`);
+  return select;
+}
+
+export function smoothingSlider(
+  root: HTMLElement,
+  index: number,
+): HTMLInputElement {
+  const slider =
+    root.querySelectorAll<HTMLInputElement>(".layer__smoothing")[index];
+  if (slider === undefined)
+    throw new Error(`No smoothing slider at index ${index}.`);
   return slider;
 }
