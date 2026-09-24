@@ -30,27 +30,52 @@ const ICON_PATHS: Record<IconName, readonly string[]> = {
   ],
 };
 
+/** GitHub's mark, as published in their 16x16 logo. */
+const GITHUB_MARK =
+  "M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z";
+
 /**
  * Builds an icon as SVG rather than an emoji, so it inherits the text colour and stays crisp.
  *
  * Icons carry no text, so the button around them is what has to be named — see `iconButton`.
  */
 export function icon(name: IconName): SVGElement {
-  const svg = document.createElementNS(SVG_NAMESPACE, "svg");
-  svg.setAttribute("viewBox", "0 0 24 24");
-  svg.setAttribute("width", "18");
-  svg.setAttribute("height", "18");
-  svg.setAttribute("fill", "none");
-  svg.setAttribute("stroke", "currentColor");
-  svg.setAttribute("stroke-width", "1.7");
-  svg.setAttribute("stroke-linecap", "round");
-  svg.setAttribute("stroke-linejoin", "round");
-  svg.setAttribute("aria-hidden", "true");
+  const element = svg(24);
+  element.setAttribute("fill", "none");
+  element.setAttribute("stroke", "currentColor");
+  element.setAttribute("stroke-width", "1.7");
+  element.setAttribute("stroke-linecap", "round");
+  element.setAttribute("stroke-linejoin", "round");
+  element.append(...ICON_PATHS[name].map((shape) => path(shape)));
+  return element;
+}
 
-  for (const path of ICON_PATHS[name]) {
-    const element = document.createElementNS(SVG_NAMESPACE, "path");
-    element.setAttribute("d", path);
-    svg.append(element);
-  }
-  return svg;
+/**
+ * The GitHub mark, for the link back to the source.
+ *
+ * Kept out of `ICON_PATHS` because it is a different kind of artwork: those are stroked outlines on
+ * a 24x24 grid, while this is a filled logo — its silhouette is the shape, rather than a line drawn
+ * round one — on the 16x16 grid GitHub publishes it on.
+ */
+export function githubMark(): SVGElement {
+  const element = svg(16);
+  element.setAttribute("fill", "currentColor");
+  element.append(path(GITHUB_MARK));
+  return element;
+}
+
+/** An SVG element `size` px on its own square grid, hidden from assistive tech. */
+function svg(size: number): SVGElement {
+  const element = document.createElementNS(SVG_NAMESPACE, "svg");
+  element.setAttribute("viewBox", `0 0 ${size} ${size}`);
+  element.setAttribute("width", String(size));
+  element.setAttribute("height", String(size));
+  element.setAttribute("aria-hidden", "true");
+  return element;
+}
+
+function path(shape: string): SVGPathElement {
+  const element = document.createElementNS(SVG_NAMESPACE, "path");
+  element.setAttribute("d", shape);
+  return element;
 }

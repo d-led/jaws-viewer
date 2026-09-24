@@ -99,6 +99,22 @@ body {
   border-top: 1px solid var(--border);
 }
 
+/* Where this viewer's code lives, as the last line of the panel. */
+.source-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.6rem;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  text-decoration: none;
+}
+
+.source-link:hover,
+.source-link:focus-visible {
+  color: var(--text);
+}
+
 .status {
   min-height: 2.4em;
   margin: 0;

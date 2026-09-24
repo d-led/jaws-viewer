@@ -54,6 +54,24 @@ describe("the viewer application", () => {
     );
   });
 
+  it("says where the code that draws this viewer lives", () => {
+    const { root } = createTestApp();
+
+    const link = root.querySelector<HTMLAnchorElement>(".source-link");
+
+    expect(link?.href).toBe("https://github.com/d-led/jaws-viewer");
+    expect(link?.textContent).toBe("View on GitHub");
+  });
+
+  it("opens the source in a tab of its own, without handing the page over", () => {
+    const { root } = createTestApp();
+
+    const link = root.querySelector<HTMLAnchorElement>(".source-link");
+
+    expect(link?.target).toBe("_blank");
+    expect(link?.rel).toContain("noopener");
+  });
+
   it("adds a layer for every scan in the bundle", async () => {
     const { app, viewport } = createTestApp();
 

@@ -31,6 +31,7 @@ import type {
 } from "../viewer/viewport";
 import { button, el, iconButton } from "./dom";
 import { installDropTarget } from "./drop-target";
+import { githubMark } from "./icons";
 import { createImmersiveMode } from "./immersive";
 import { createLayersPanel, type LayerView } from "./layers-panel";
 import { createMetadataPanel, type MatrixTarget } from "./metadata-panel";
@@ -445,6 +446,7 @@ export function createApp(root: HTMLElement, options: AppOptions): App {
           class: "hint hint--touch",
           text: TOUCH_HINT,
         }),
+        sourceLink(),
       ]),
     ]),
     stage,
@@ -482,6 +484,31 @@ export const PRIVACY_NOTE =
  * the point rather than a decoration on a page.
  */
 export const TOUCH_HINT = "One finger rotates · two fingers scroll";
+
+/** Where this viewer's code lives: the viewer is open source, so the page says so. */
+export const SOURCE_URL = "https://github.com/d-led/jaws-viewer";
+
+/**
+ * The link home, at the foot of the panel.
+ *
+ * The mark is the shape people know as "the source is this way", and the words beside it are what
+ * names the link for anyone who cannot see it.
+ */
+function sourceLink(): HTMLAnchorElement {
+  return el(
+    "a",
+    {
+      class: "source-link",
+      attrs: {
+        href: SOURCE_URL,
+        target: "_blank",
+        rel: "noopener noreferrer",
+      },
+      title: "Read the source on GitHub",
+    },
+    [githubMark(), el("span", { text: "View on GitHub" })],
+  );
+}
 
 const DESKTOP_HINT =
   "Drop the export folder, its files, or a .zip of it anywhere on this page.";
