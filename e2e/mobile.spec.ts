@@ -4,6 +4,7 @@ import {
   writeSampleBundle,
   type SampleBundle,
 } from "./sample-bundle";
+import { settledCamera, shiftBetween } from "./stored-view";
 
 const FILE_INPUT = ".file-picker:not([webkitdirectory])";
 
@@ -214,8 +215,7 @@ test.describe("the first screen on a phone", () => {
     await page.setInputFiles(FILE_INPUT, bundle.files);
     await expect(page.getByText(/Loaded 3 layers/)).toBeVisible();
 
-    const canvas = page.locator("canvas");
-    const framed = await canvas.screenshot();
+    const framed = await settledCamera(page);
 
     const release = await fingerDown(page, await middleOfModel(page));
 
@@ -224,17 +224,29 @@ test.describe("the first screen on a phone", () => {
     await expect(page.getByText("Orbit centre set")).toBeVisible();
     await release();
 
-    // Setting it moved nothing, and the mark that showed where it went has gone by the time the
-    // message has: the picture is the one the camera was already showing.
-    await expect(page.getByText("Orbit centre set")).toBeHidden({
-      timeout: 10_000,
-    });
-    const set = await canvas.screenshot();
-    expect(set.equals(framed)).toBe(true);
+    // Setting it moved nothing — the camera, and so the picture, is where it was — and the point a
+    // later turn goes round is the only thing that has changed.
+    await expect
+      .poll(async () => (await settledCamera(page)).orbitCentre)
+      .not.toEqual(framed.orbitCentre);
 
-    // But it is what the next drag turns about, so then the picture does move — about that point.
+    const set = await settledCamera(page);
+    expect(shiftBetween(framed.position, set.position)).toBeLessThan(0.001);
+    expect(shiftBetween(framed.target, set.target)).toBeLessThan(0.001);
+
+    // But it is what the next drag turns about: the camera moves, and that point does not.
     await dragFingers(page, [await middleOfModel(page)]);
-    expect((await canvas.screenshot()).equals(set)).toBe(false);
+
+    await expect
+      .poll(async () =>
+        shiftBetween((await settledCamera(page)).position, set.position),
+      )
+      .toBeGreaterThan(1);
+
+    const turned = await settledCamera(page);
+    expect(shiftBetween(set.orbitCentre, turned.orbitCentre)).toBeLessThan(
+      0.001,
+    );
   });
 
   test("shows the grid switch, folded transform and privacy note in the panel", async ({
