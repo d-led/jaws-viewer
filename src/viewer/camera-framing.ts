@@ -159,7 +159,8 @@ export function visibleBoundsOf(objects: Iterable<Object3D>): Box3 | null {
   return box.isEmpty() ? null : box;
 }
 
-function extentOf(bounds: Box3): number {
+/** The size of `bounds` across whichever axis it spans most, which is what a view is framed by. */
+export function extentOf(bounds: Box3): number {
   const size = bounds.getSize(new Vector3());
   return Math.max(size.x, size.y, size.z, MIN_FRAME_EXTENT);
 }

@@ -4,6 +4,7 @@ import type { ViewController } from "../src/ui/view-controller";
 import type {
   AddLayerOutcome,
   LayerSpec,
+  ScreenPoint,
   StandardView,
   Viewport,
 } from "../src/viewer/viewport";
@@ -27,6 +28,10 @@ export class FakeViewport implements Viewport, ViewController {
   readonly separationFactors: number[] = [];
   readonly framedLayers: string[] = [];
   readonly selectedViews: StandardView[] = [];
+  readonly orbitCentrePoints: ScreenPoint[] = [];
+
+  /** Set to make a press miss the model, to exercise the quiet path. */
+  orbitCentreFindsSurface = true;
 
   isolated: string | null = null;
   frameCount = 0;
@@ -101,6 +106,11 @@ export class FakeViewport implements Viewport, ViewController {
 
   setGridVisible(visible: boolean): void {
     this.gridVisible = visible;
+  }
+
+  setOrbitCentreAt(point: ScreenPoint): boolean {
+    this.orbitCentrePoints.push(point);
+    return this.orbitCentreFindsSurface;
   }
 
   getCamera(): CameraView {

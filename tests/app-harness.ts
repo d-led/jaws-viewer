@@ -67,6 +67,8 @@ export interface AppHarness {
   settleCamera(view: CameraView): void;
   /** Simulates the viewport reporting on a layer's surfacing. */
   reportSurface(progress: SurfaceProgress): void;
+  /** Simulates the viewport reporting that a held finger moved the orbit centre. */
+  moveOrbitCentre(): void;
 }
 
 export function createTestApp(): AppHarness {
@@ -77,10 +79,12 @@ export function createTestApp(): AppHarness {
 
   let cameraSettled: (() => void) | undefined;
   let surface: ((progress: SurfaceProgress) => void) | undefined;
+  let orbitCentre: (() => void) | undefined;
   const app = createApp(root, {
     createViewport: (_canvas, options) => {
       cameraSettled = options.onCameraSettled;
       surface = options.onSurface;
+      orbitCentre = options.onOrbitCentre;
       return viewport;
     },
     store,
@@ -98,6 +102,9 @@ export function createTestApp(): AppHarness {
     reportSurface(progress) {
       surface?.(progress);
     },
+    moveOrbitCentre() {
+      orbitCentre?.();
+    },
   };
 }
 
@@ -107,6 +114,12 @@ export function statusText(root: HTMLElement): string {
 
 export function storageText(root: HTMLElement): string {
   return root.querySelector(".storage")?.textContent ?? "";
+}
+
+/** What the toast over the model is saying, or nothing while it is not up. */
+export function toastText(root: HTMLElement): string {
+  const toast = root.querySelector<HTMLElement>(".toast");
+  return toast === null || toast.hidden ? "" : (toast.textContent ?? "");
 }
 
 export function opacitySlider(

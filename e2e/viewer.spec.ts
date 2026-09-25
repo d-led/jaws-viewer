@@ -7,6 +7,28 @@ import {
 
 const FILE_INPUT = ".file-picker:not([webkitdirectory])";
 
+/**
+ * How long to hold a button down: well past what the app waits for, so that its own clock is what
+ * decides whether a hold happened.
+ */
+const HOLD_MS = 1500;
+
+/**
+ * Holds the button down on a spot, which is how the orbit centre is set.
+ *
+ * Generous rather than exact on purpose: software WebGL draws slowly, and input and timers can both
+ * be queued behind it, so a test that raced the app's own hold would fail on a busy machine.
+ */
+async function holdButton(
+  page: Page,
+  point: { readonly x: number; readonly y: number },
+): Promise<void> {
+  await page.mouse.move(point.x, point.y);
+  await page.mouse.down();
+  await page.waitForTimeout(HOLD_MS);
+  await page.mouse.up();
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -54,6 +76,44 @@ function storedOpacities(stored: unknown): number[] {
   });
 }
 
+/** The camera as the app stores it: where it stands, what it looks at, and what it turns about. */
+interface StoredCamera {
+  readonly position: Triple;
+  readonly target: Triple;
+  readonly orbitCentre: Triple;
+}
+
+type Triple = readonly [number, number, number];
+
+/** The three numbers a stored position or target holds, or nothing when it is not one. */
+function tripleOf(stored: unknown): Triple | null {
+  if (!Array.isArray(stored)) return null;
+
+  const [x, y, z] = stored as readonly unknown[];
+  return typeof x === "number" && typeof y === "number" && typeof z === "number"
+    ? [x, y, z]
+    : null;
+}
+
+/** The camera out of a stored view, or nothing when nothing is stored yet. */
+function storedCamera(stored: unknown): StoredCamera | null {
+  if (!isRecord(stored)) return null;
+
+  const { camera } = stored;
+  if (!isRecord(camera)) return null;
+
+  const position = tripleOf(camera["position"]);
+  const target = tripleOf(camera["target"]);
+  if (position === null || target === null) return null;
+
+  // A view stored before the centre was the user's to move settles for what the camera looks at.
+  return {
+    position,
+    target,
+    orbitCentre: tripleOf(camera["orbitCentre"]) ?? target,
+  };
+}
+
 /**
  * How far the camera sits from what it is looking at, read out of a stored view.
  *
@@ -61,19 +121,54 @@ function storedOpacities(stored: unknown): number[] {
  * which is all a test needs to say "the view was left alone". Nought when nothing is stored yet.
  */
 function cameraDistance(stored: unknown): number {
-  if (!isRecord(stored)) return 0;
+  const camera = storedCamera(stored);
+  return camera === null
+    ? 0
+    : Math.round(shiftBetween(camera.position, camera.target));
+}
 
-  const { camera } = stored;
-  if (!isRecord(camera)) return 0;
+/** How far apart two stored camera positions are, in the millimetres the model is measured in. */
+function shiftBetween(from: Triple, to: Triple): number {
+  const [x, y, z] = differences(from, to);
 
-  const position = camera["position"];
-  const target = camera["target"];
-  if (!Array.isArray(position) || !Array.isArray(target)) return 0;
+  return Math.hypot(x, y, z);
+}
 
-  const distances = position.map((value, axis) => value - target[axis]);
-  if (distances.some((value) => typeof value !== "number")) return 0;
+/** One stored triple taken away from another. */
+function differences(from: Triple, to: Triple): Triple {
+  return [to[0] - from[0], to[1] - from[1], to[2] - from[2]];
+}
 
-  return Math.round(Math.hypot(...distances));
+/**
+ * How far the point the camera turns about is from the middle of what it is looking at, in radians.
+ *
+ * How far off the middle of the screen it appears, in other words, since the camera looks at what it
+ * looks at: turning about that point has to leave this exactly as it was.
+ */
+function bearingOf(camera: StoredCamera): number {
+  const [ax, ay, az] = differences(camera.position, camera.target);
+  const [bx, by, bz] = differences(camera.position, camera.orbitCentre);
+  const [looked, toCentre] = [Math.hypot(ax, ay, az), Math.hypot(bx, by, bz)];
+  const cosine = (ax * bx + ay * by + az * bz) / (looked * toCentre);
+
+  return Math.acos(Math.min(Math.max(cosine, -1), 1));
+}
+
+/**
+ * Drags a button across the canvas: the left one turns the model, and the right one pans it.
+ *
+ * In steps, because a turn arrives as the pointer moves rather than as one jump.
+ */
+async function dragAcross(
+  page: Page,
+  from: { readonly x: number; readonly y: number },
+  dx: number,
+  button: "left" | "right" = "left",
+): Promise<void> {
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down({ button });
+  await page.mouse.move(from.x + dx, from.y, { steps: 5 });
+  await page.mouse.up({ button });
 }
 
 let bundle: SampleBundle;
@@ -194,6 +289,189 @@ test.describe("loading an export", () => {
     // Should be a no-op that does not break the view.
     await recenter.click();
     await expect(page.locator("canvas")).toBeVisible();
+  });
+
+  test("sets the orbit centre from a held button, leaving the view alone", async ({
+    page,
+  }) => {
+    await expect
+      .poll(async () => cameraDistance(await storedView(page)))
+      .toBeGreaterThan(0);
+
+    const framed = storedCamera(await storedView(page));
+    if (framed === null)
+      throw new Error("Expected a loaded view to be stored.");
+
+    const canvas = await page.locator("canvas").boundingBox();
+    // Away from the middle of the model, where a preparation die or a tooth would be.
+    await holdButton(page, {
+      x: (canvas?.x ?? 0) + (canvas?.width ?? 0) * 0.4,
+      y: (canvas?.y ?? 0) + (canvas?.height ?? 0) * 0.68,
+    });
+
+    await expect(page.getByText("Orbit centre set")).toBeVisible();
+    await expect
+      .poll(async () => storedCamera(await storedView(page))?.orbitCentre)
+      .not.toEqual(framed.orbitCentre);
+
+    const held = storedCamera(await storedView(page));
+    if (held === null) throw new Error("Expected the view to still be stored.");
+
+    // Nothing has moved. The point a later turn goes round is all that has changed, which is why
+    // setting it is silent apart from the mark that says where it is.
+    expect(shiftBetween(framed.position, held.position)).toBeLessThan(0.001);
+    expect(shiftBetween(framed.target, held.target)).toBeLessThan(0.001);
+  });
+
+  test("turns about the point that was set, and moves nothing else", async ({
+    page,
+  }) => {
+    await expect
+      .poll(async () => cameraDistance(await storedView(page)))
+      .toBeGreaterThan(0);
+
+    const canvas = await page.locator("canvas").boundingBox();
+    const held = {
+      x: (canvas?.x ?? 0) + (canvas?.width ?? 0) * 0.4,
+      y: (canvas?.y ?? 0) + (canvas?.height ?? 0) * 0.68,
+    };
+    await holdButton(page, held);
+    await expect(page.getByText("Orbit centre set")).toBeVisible();
+    await expect
+      .poll(async () => storedCamera(await storedView(page)))
+      .not.toBeNull();
+
+    const set = storedCamera(await storedView(page));
+    if (set === null) throw new Error("Expected a view to be stored.");
+
+    await dragAcross(page, held, 240);
+
+    const turned = storedCamera(await storedView(page));
+    if (turned === null)
+      throw new Error("Expected the view to still be stored.");
+
+    // It turned: the camera stands somewhere else, and looks somewhere else.
+    expect(shiftBetween(set.position, turned.position)).toBeGreaterThan(1);
+
+    // About that point: the camera is as far from it as it was, and the point has not moved across
+    // the screen, which is what it means to turn about it.
+    expect(shiftBetween(set.orbitCentre, turned.orbitCentre)).toBeLessThan(
+      0.001,
+    );
+    expect(shiftBetween(turned.position, turned.orbitCentre)).toBeCloseTo(
+      shiftBetween(set.position, set.orbitCentre),
+      3,
+    );
+    expect(bearingOf(turned)).toBeCloseTo(bearingOf(set), 6);
+  });
+
+  test("keeps the point it turns about when the model is panned", async ({
+    page,
+  }) => {
+    await expect
+      .poll(async () => cameraDistance(await storedView(page)))
+      .toBeGreaterThan(0);
+
+    const canvas = await page.locator("canvas").boundingBox();
+    await holdButton(page, {
+      x: (canvas?.x ?? 0) + (canvas?.width ?? 0) * 0.4,
+      y: (canvas?.y ?? 0) + (canvas?.height ?? 0) * 0.68,
+    });
+    await expect(page.getByText("Orbit centre set")).toBeVisible();
+    await expect
+      .poll(async () => storedCamera(await storedView(page)))
+      .not.toBeNull();
+
+    const set = storedCamera(await storedView(page));
+    if (set === null) throw new Error("Expected a view to be stored.");
+
+    await dragAcross(
+      page,
+      {
+        x: (canvas?.x ?? 0) + (canvas?.width ?? 0) / 2,
+        y: (canvas?.y ?? 0) + (canvas?.height ?? 0) / 2,
+      },
+      120,
+      "right",
+    );
+
+    const panned = storedCamera(await storedView(page));
+    if (panned === null)
+      throw new Error("Expected the view to still be stored.");
+
+    // Panning moves the view, and the point the camera turns about stays where the user put it.
+    expect(shiftBetween(set.position, panned.position)).toBeGreaterThan(1);
+    expect(shiftBetween(set.orbitCentre, panned.orbitCentre)).toBeLessThan(
+      0.001,
+    );
+  });
+
+  test("puts the point it turns about back in the middle when it is re-centered", async ({
+    page,
+  }) => {
+    await expect
+      .poll(async () => cameraDistance(await storedView(page)))
+      .toBeGreaterThan(0);
+
+    const canvas = await page.locator("canvas").boundingBox();
+    await holdButton(page, {
+      x: (canvas?.x ?? 0) + (canvas?.width ?? 0) * 0.4,
+      y: (canvas?.y ?? 0) + (canvas?.height ?? 0) * 0.68,
+    });
+    await expect(page.getByText("Orbit centre set")).toBeVisible();
+
+    await page.getByRole("button", { name: "Re-center everything" }).click();
+
+    await expect
+      .poll(async () => {
+        const view = storedCamera(await storedView(page));
+        if (view === null) return Number.POSITIVE_INFINITY;
+        return shiftBetween(view.orbitCentre, view.target);
+      })
+      .toBeLessThan(0.001);
+  });
+
+  test("leaves the view alone when a held button finds no model under it", async ({
+    page,
+  }) => {
+    await expect
+      .poll(async () => cameraDistance(await storedView(page)))
+      .toBeGreaterThan(0);
+    const framed = storedCamera(await storedView(page));
+    if (framed === null)
+      throw new Error("Expected a loaded view to be stored.");
+
+    const canvas = await page.locator("canvas").boundingBox();
+    // The top left corner of the view: the background, with the model framed inside it.
+    await holdButton(page, {
+      x: (canvas?.x ?? 0) + 8,
+      y: (canvas?.y ?? 0) + 8,
+    });
+
+    // Nothing was found, so nothing is said, and the centre stays where it was. `OrbitControls`
+    // rebuilds the camera position from its spherical coordinates every frame, so "where it was" is
+    // to within the last bit of the arithmetic rather than to the digit.
+    await expect(page.getByText("Orbit centre set")).toBeHidden();
+
+    const untouched = storedCamera(await storedView(page));
+    if (untouched === null)
+      throw new Error("Expected the view to still be stored.");
+    expect(shiftBetween(framed.position, untouched.position)).toBeLessThan(
+      0.001,
+    );
+    expect(shiftBetween(framed.target, untouched.target)).toBeLessThan(0.001);
+
+    // And the same hold on the model does move it, so the quiet above was the press finding nothing
+    // rather than the hold never landing at all.
+    await holdButton(page, {
+      x: (canvas?.x ?? 0) + (canvas?.width ?? 0) / 2,
+      y: (canvas?.y ?? 0) + (canvas?.height ?? 0) * 0.6,
+    });
+
+    await expect(page.getByText("Orbit centre set")).toBeVisible();
+    await expect
+      .poll(async () => storedCamera(await storedView(page))?.orbitCentre)
+      .not.toEqual(framed.orbitCentre);
   });
 
   test("snaps to an axis view", async ({ page }) => {

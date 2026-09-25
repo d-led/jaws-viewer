@@ -27,7 +27,8 @@ Nothing is uploaded. Files are read in the browser and never leave the machine.
 - **Shows the case metadata**: patient, practice, tray number, tooth colour, antagonist type
   and the sending practice's notes.
 - **Orbit, pan and zoom** with a mouse or by touch, snap to orthographic views, and toggle
-  the reference grid and full screen.
+  the reference grid and full screen. A held finger — or a held mouse button — sets the point the
+  model turns about, and moves nothing else.
 
 ## Getting started
 
@@ -59,13 +60,18 @@ Then drop your export onto the page, or use **Open folder…**.
 
 ## Navigating the model
 
-| Input                                                  | Action                    |
-| ------------------------------------------------------ | ------------------------- |
-| Left-drag                                              | Orbit                     |
-| Wheel                                                  | Zoom toward the pointer   |
-| Right-drag                                             | Pan                       |
-| `Top` / `Bottom` / `Front` / `Back` / `Left` / `Right` | Snap to an axis view      |
-| Re-center                                              | Frame every visible layer |
+| Input                                                  | Action                              |
+| ------------------------------------------------------ | ----------------------------------- |
+| Left-drag                                              | Orbit                               |
+| Wheel                                                  | Zoom toward the pointer             |
+| Right-drag                                             | Pan                                 |
+| Press and hold                                         | Set the point the model turns about |
+| `Top` / `Bottom` / `Front` / `Back` / `Left` / `Right` | Snap to an axis view                |
+| Re-center                                              | Frame every visible layer           |
+
+Orbiting and zooming turn about a point the user sets. Until they set one it is the middle of what
+was framed; holding a button down on a spot sets it to that spot and moves nothing else. Panning and
+zooming leave it where it is, and re-centering puts it back in the middle of the model.
 
 ### On a touch screen
 
@@ -75,6 +81,7 @@ the page gets the second:
 | Input                        | Action                                                     |
 | ---------------------------- | ---------------------------------------------------------- |
 | One finger                   | Orbits — and nothing else, so a drag never scrolls as well |
+| One finger, held in place    | Sets the orbit centre to that spot                         |
 | Two fingers, moving together | Scrolls the page to the panel below the model              |
 | Two fingers, pinching        | Zooms the model                                            |
 
@@ -86,7 +93,17 @@ is deliberately left alone, because a pinch barely moves the midpoint. The canva
 not just the panel — is allowed to scroll on a narrow screen, so there is something for two
 fingers to move.
 
-A hint over the model says so, and disappears once a two-finger gesture has been used.
+A phone has no second button, so the point the model turns about is set by holding a finger on the
+model, and a mouse can do the same by holding a button down (`src/viewer/long-press.ts`). The centre
+becomes the spot that was held, a small mark flashes on it to say so, and nothing else moves: what
+the camera looks at is left exactly as it was, so the picture does not change until the next drag —
+and that drag is what turns about the point just set. Turning is done here rather than by
+`OrbitControls` (`src/viewer/orbit.ts`), because `OrbitControls` turns about whatever the camera is
+looking at, and the whole point of this is that the two are different things: panning, zooming and
+the axis views stay with `OrbitControls`, while re-centering, snapping to an axis view or opening the
+bite all frame the model again — and framing is what puts the centre back in the middle of it.
+
+A hint over the model names the gestures, and disappears once a two-finger gesture has been used.
 
 Folder picking is left out on iOS and Android, which ignore `webkitdirectory`; there the empty
 state points at picking the files, or a `.zip` of the folder, instead. Archives are found by

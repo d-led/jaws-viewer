@@ -38,6 +38,7 @@ import { createMetadataPanel, type MatrixTarget } from "./metadata-panel";
 import { defaultColour } from "./palette";
 import { createSeparationControl } from "./separation-control";
 import { createStorageNotice } from "./storage-notice";
+import { createToast } from "./toast";
 import type { ViewController } from "./view-controller";
 import { createViewToolbar } from "./view-toolbar";
 
@@ -76,6 +77,8 @@ export function createApp(root: HTMLElement, options: AppOptions): App {
   ]);
   // Says how to move the model on a touch screen, where one finger is taken by scrolling.
   const touchHint = el("p", { class: "touch-hint", text: TOUCH_HINT });
+  // Said over the model rather than in the panel, which on a phone is below the fold.
+  const toast = createToast();
 
   const viewport = createViewport(canvas, {
     onStats: (stats) => {
@@ -84,6 +87,7 @@ export function createApp(root: HTMLElement, options: AppOptions): App {
     // Orbiting changes nothing a control describes, so the camera has to say so itself.
     onCameraSettled: () => remember(),
     onSurface: (progress) => reportSurface(progress),
+    onOrbitCentre: () => toast.show(ORBIT_CENTRE_MOVED),
   });
 
   /** How the bundle is being looked at — the one description the surface is driven from. */
@@ -417,7 +421,11 @@ export function createApp(root: HTMLElement, options: AppOptions): App {
 
   const stage = el("main", { class: "stage" }, [
     canvas,
-    createViewToolbar(viewport),
+    // The toolbar and the message that belongs under it, stacked so they cannot overlap.
+    el("div", { class: "stage__top" }, [
+      createViewToolbar(viewport),
+      toast.element,
+    ]),
     hud,
     touchHint,
     empty,
@@ -440,7 +448,7 @@ export function createApp(root: HTMLElement, options: AppOptions): App {
         el("p", { class: "hint", text: PRIVACY_NOTE }),
         el("p", {
           class: "hint hint--mouse",
-          text: "Drag to orbit · wheel to zoom · right-drag to pan",
+          text: "Drag to orbit · wheel to zoom · right-drag to pan · hold to set the orbit centre",
         }),
         el("p", {
           class: "hint hint--touch",
@@ -482,8 +490,18 @@ export const PRIVACY_NOTE =
  * The gesture split for a touch screen: the model answers to one finger and nothing else, and
  * two fingers are given to the page — the reverse of an embedded map, because here the model is
  * the point rather than a decoration on a page.
+ *
+ * A finger held on one spot is what a touch screen has instead of the right-drag that moves the
+ * orbit centre with a mouse, so the hint has to name it too.
  */
-export const TOUCH_HINT = "One finger rotates · two fingers scroll";
+export const TOUCH_HINT =
+  "One finger rotates · two fingers scroll · hold to set the orbit centre";
+
+/**
+ * Said when a held finger has moved the orbit centre, with the way back, since nothing on screen
+ * shows where the centre now is.
+ */
+export const ORBIT_CENTRE_MOVED = "Orbit centre set · Re-center puts it back";
 
 /** Where this viewer's code lives: the viewer is open source, so the page says so. */
 export const SOURCE_URL = "https://github.com/d-led/jaws-viewer";

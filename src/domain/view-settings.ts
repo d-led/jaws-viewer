@@ -35,6 +35,11 @@ export interface LayerSettings {
 export interface CameraView {
   readonly position: readonly [number, number, number];
   readonly target: readonly [number, number, number];
+  /**
+   * The point the camera turned about. Absent in views stored before the user could move it, and
+   * the middle of what was framed is all such a view can be taken to have had.
+   */
+  readonly orbitCentre?: readonly [number, number, number];
 }
 
 /**
@@ -236,7 +241,13 @@ function isString(value: unknown): boolean {
 function isCameraView(value: unknown): value is CameraView {
   if (!isRecord(value)) return false;
 
-  return isTriple(value["position"]) && isTriple(value["target"]);
+  const orbitCentre = value["orbitCentre"];
+
+  return (
+    isTriple(value["position"]) &&
+    isTriple(value["target"]) &&
+    (orbitCentre === undefined || isTriple(orbitCentre))
+  );
 }
 
 function isTriple(value: unknown): boolean {

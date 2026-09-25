@@ -36,6 +36,7 @@ import { errorMessage } from "../support/errors";
 import {
   DEFAULT_DIRECTION,
   GRID_EXTENT_MM,
+  extentOf,
   framingFor,
   gridPlacementFor,
   poseFor,
@@ -52,6 +53,11 @@ import {
   type SurfaceLayer,
   type SurfaceMaterial,
 } from "./layer-surface";
+import { createOrbitCentreMarker } from "./orbit-centre-marker";
+import { installLongPress } from "./long-press";
+import { installOrbitDrag } from "./orbit-drag";
+import { turnAbout, turnFor } from "./orbit";
+import { pickedPoint } from "./picking";
 import {
   createSurfacePainter,
   replyFor,
@@ -69,6 +75,7 @@ import {
 import type {
   AddLayerOutcome,
   LayerSpec,
+  ScreenPoint,
   StandardView,
   SurfaceProgress,
   Viewport,
@@ -118,6 +125,7 @@ class ThreeViewport implements Viewport {
   private readonly layers = new Map<string, RenderedLayer>();
   private readonly resizeObserver: ResizeObserver;
   private readonly loader = new STLLoader();
+  private readonly orbitMarker = createOrbitCentreMarker();
   private readonly timer = new Timer();
   private readonly options: ViewportOptions;
   private readonly painter: SurfacePainter = createSurfacePainter();
@@ -126,6 +134,13 @@ class ThreeViewport implements Viewport {
   private isolatedId: string | null = null;
   private separationFactor = 0;
   private lastSize: ViewSize | null = null;
+  /**
+   * The point the camera turns about, which the user sets and `OrbitControls` is never told about.
+   *
+   * Kept apart from what the camera looks at on purpose: setting it must move nothing, and the way
+   * to do that is to leave the camera — and so what it looks at — exactly where it was.
+   */
+  private readonly orbitCentre = new Vector3();
 
   constructor(canvas: HTMLCanvasElement, options: ViewportOptions = {}) {
     this.options = options;
@@ -139,6 +154,9 @@ class ThreeViewport implements Viewport {
 
     this.scene.background = new Color(BACKGROUND_COLOUR);
     this.scene.add(this.content);
+    // In the scene rather than in the content: it marks the camera's pivot, so framing the model and
+    // pressing on it must both leave it out of the picture.
+    this.scene.add(this.orbitMarker.object);
     this.addLights();
 
     this.roomEnvironment = new RoomEnvironment();
@@ -162,6 +180,9 @@ class ThreeViewport implements Viewport {
     this.controls.dampingFactor = 0.08;
     this.controls.screenSpacePanning = true;
     this.controls.zoomToCursor = true;
+    // Turning is left to `orbit.ts`: `OrbitControls` turns about the point it looks at, and this
+    // viewer turns about the point the user set, wherever that is. Panning and zooming stay here.
+    this.controls.enableRotate = false;
     // Mouse: drag orbits, wheel zooms, right-drag pans.
     // Touch: one finger orbits and nothing else, so a drag never scrolls as well; two fingers
     // scroll the page. OrbitControls would otherwise set `touch-action: none` and claim both.
@@ -170,6 +191,21 @@ class ThreeViewport implements Viewport {
     installTwoFingerScroll(canvas, {
       setPanning: (enabled) => {
         this.controls.enablePan = enabled;
+      },
+    });
+    installOrbitDrag(canvas, {
+      onTurn: (drag) => {
+        this.turnCamera(drag);
+      },
+      onEnd: () => {
+        this.handleCameraSettled();
+      },
+    });
+    // A held finger asks for a new orbit centre, which is what a touch screen has instead of the
+    // right-drag that moves one around with a mouse.
+    installLongPress(canvas, {
+      onLongPress: (point) => {
+        this.setOrbitCentreAt(point);
       },
     });
 
@@ -362,15 +398,45 @@ class ThreeViewport implements Viewport {
     this.grid.visible = visible;
   }
 
+  setOrbitCentreAt(point: ScreenPoint): boolean {
+    const canvas = this.renderer.domElement;
+    const { left, top, width, height } = canvas.getBoundingClientRect();
+
+    const picked = pickedPoint({
+      camera: this.camera,
+      surfaces: [...this.layers.values()].map((layer) => layer.mesh),
+      point: { x: point.x - left, y: point.y - top },
+      size: { width, height },
+    });
+    if (picked === null) return false;
+
+    // The whole of it: the centre moves, and nothing else does. It is what every turn from here on
+    // goes round, which is why the camera — and so the picture — is left exactly as it is.
+    this.orbitCentre.copy(picked);
+    this.markOrbitCentre(picked);
+    this.handleCameraSettled();
+    this.options.onOrbitCentre?.();
+    return true;
+  }
+
   getCamera(): CameraView {
     const { x, y, z } = this.camera.position;
     const { x: tx, y: ty, z: tz } = this.controls.target;
-    return { position: [x, y, z], target: [tx, ty, tz] };
+    const { x: cx, y: cy, z: cz } = this.orbitCentre;
+
+    return {
+      position: [x, y, z],
+      target: [tx, ty, tz],
+      orbitCentre: [cx, cy, cz],
+    };
   }
 
   setCamera(view: CameraView): void {
     this.camera.position.set(...view.position);
     this.controls.target.set(...view.target);
+    // A view stored before the centre was the user's to move has none to come back to, and what the
+    // camera looks at is the best the middle of the model can be recovered from.
+    this.orbitCentre.set(...(view.orbitCentre ?? view.target));
 
     const box = this.contentBounds();
     if (box !== null) this.limitZoom(box);
@@ -384,6 +450,7 @@ class ThreeViewport implements Viewport {
     this.controls.removeEventListener("end", this.handleCameraSettled);
     this.clearLayers();
     this.painter.dispose();
+    this.orbitMarker.dispose();
     this.grid.geometry.dispose();
     this.grid.material.dispose();
     this.roomEnvironment.dispose();
@@ -496,6 +563,34 @@ class ThreeViewport implements Viewport {
     return visibleBoundsOf(this.content.children);
   }
 
+  /** Flashes the mark that says where the orbit centre went, sized to what is on screen. */
+  private markOrbitCentre(centre: Vector3): void {
+    const bounds = this.contentBounds();
+    if (bounds !== null) this.orbitMarker.flash(centre, extentOf(bounds));
+  }
+
+  /** Turns the camera about the orbit centre, as the pointer drags. */
+  private turnCamera(drag: { readonly x: number; readonly y: number }): void {
+    // How far in front of the camera the point it looks at sits, which is `OrbitControls`' business
+    // and has to survive the turn: the turn is about the orbit centre, not about that point.
+    const reach = this.camera.position.distanceTo(this.controls.target);
+
+    turnAbout(
+      this.camera,
+      this.orbitCentre,
+      turnFor(drag, this.renderer.domElement.clientHeight),
+    );
+    this.controls.target
+      .copy(this.camera.position)
+      .addScaledVector(this.viewDirection(), reach);
+    this.controls.update();
+  }
+
+  /** The way the camera looks, which is the line the point it looks at has to sit on. */
+  private viewDirection(): Vector3 {
+    return this.camera.getWorldDirection(new Vector3());
+  }
+
   /**
    * Pulls back to keep all of the assembly in view, without moving the grid.
    *
@@ -508,6 +603,12 @@ class ThreeViewport implements Viewport {
     this.frame(box, this.currentDirection());
   }
 
+  /**
+   * Frames `box` from `direction`.
+   *
+   * The camera ends up looking at the middle of the box, which is also what puts the orbit centre
+   * back where it started — the whole of what Re-center promises about it.
+   */
   private frame(box: Box3, direction: Vector3): void {
     const framing = framingFor({
       bounds: box,
@@ -524,7 +625,12 @@ class ThreeViewport implements Viewport {
     this.controls.target.copy(framing.target);
     this.controls.minDistance = framing.minDistance;
     this.controls.maxDistance = framing.maxDistance;
+    // Framing is what puts the orbit centre back in the middle of the model, which is what Re-center
+    // promises: the camera turns about what it was just framed on. That is a change to the view a
+    // session remembers like any other.
+    this.orbitCentre.copy(framing.target);
     this.controls.update();
+    this.handleCameraSettled();
   }
 
   private limitZoom(box: Box3): void {
@@ -545,6 +651,8 @@ class ThreeViewport implements Viewport {
       ? DEFAULT_DIRECTION.clone()
       : direction.normalize();
   }
+
+  /** The way the camera looks, which is the line an orbit centre has to sit along. */
 
   private readonly handleResize = (): void => {
     const size = resizeFor({

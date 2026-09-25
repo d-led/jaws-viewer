@@ -50,6 +50,33 @@ async function middleOfModel(page: Page): Promise<{ x: number; y: number }> {
   };
 }
 
+/**
+ * Puts one finger down on a spot, the way the orbit centre is set on a touch screen, and hands back
+ * the way to take it off again.
+ *
+ * Touch is driven through CDP for the same reason a drag is: a hold is a matter of how long the
+ * finger stays down, which a click cannot say. The caller decides when that is over, because what a
+ * hold leaves on screen is only up for a moment.
+ */
+async function fingerDown(
+  page: Page,
+  point: { readonly x: number; readonly y: number },
+): Promise<() => Promise<void>> {
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send("Input.dispatchTouchEvent", {
+    type: "touchStart",
+    touchPoints: [point],
+  });
+
+  return async () => {
+    await cdp.send("Input.dispatchTouchEvent", {
+      type: "touchEnd",
+      touchPoints: [],
+    });
+    await cdp.detach();
+  };
+}
+
 let bundle: SampleBundle;
 
 test.beforeAll(async () => {
@@ -104,7 +131,11 @@ test.describe("the first screen on a phone", () => {
     await page.goto("/");
 
     await expect(
-      page.getByText("One finger rotates · two fingers scroll").first(),
+      page
+        .getByText(
+          "One finger rotates · two fingers scroll · hold to set the orbit centre",
+        )
+        .first(),
     ).toBeVisible();
     await expect(
       page.getByText("Drag to orbit · wheel to zoom · right-drag to pan"),
@@ -174,6 +205,36 @@ test.describe("the first screen on a phone", () => {
     ]);
 
     expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
+  });
+
+  test("sets the orbit centre from a held finger, and turns about it afterwards", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    await page.setInputFiles(FILE_INPUT, bundle.files);
+    await expect(page.getByText(/Loaded 3 layers/)).toBeVisible();
+
+    const canvas = page.locator("canvas");
+    const framed = await canvas.screenshot();
+
+    const release = await fingerDown(page, await middleOfModel(page));
+
+    // The hold is the app's to time, and it says so itself: wait for that rather than for a
+    // stopwatch, since a busy page can delay both the touch and the timer behind it.
+    await expect(page.getByText("Orbit centre set")).toBeVisible();
+    await release();
+
+    // Setting it moved nothing, and the mark that showed where it went has gone by the time the
+    // message has: the picture is the one the camera was already showing.
+    await expect(page.getByText("Orbit centre set")).toBeHidden({
+      timeout: 10_000,
+    });
+    const set = await canvas.screenshot();
+    expect(set.equals(framed)).toBe(true);
+
+    // But it is what the next drag turns about, so then the picture does move — about that point.
+    await dragFingers(page, [await middleOfModel(page)]);
+    expect((await canvas.screenshot()).equals(set)).toBe(false);
   });
 
   test("shows the grid switch, folded transform and privacy note in the panel", async ({

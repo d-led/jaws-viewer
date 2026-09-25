@@ -38,7 +38,8 @@ body {
 }
 
 /* The viewer owns every gesture on the canvas: one finger orbits, two fingers scroll the page
-   (see two-finger-scroll.ts). Nothing is left for the browser to pan.
+   (see two-finger-scroll.ts) and a held finger sets the orbit centre (see long-press.ts). Nothing
+   is left for the browser to pan, and nothing is left for it to select either.
 
    Out of the layout on purpose: the canvas carries its drawing buffer in a width/height pair of
    attributes, and an in-flow canvas would stretch the stage to that size instead of the other
@@ -51,6 +52,8 @@ body {
   width: 100%;
   height: 100%;
   touch-action: none;
+  user-select: none;
+  -webkit-touch-callout: none;
 }
 
 .app {
@@ -590,18 +593,30 @@ body {
   }
 }
 
-.toolbar {
+/* What floats at the top of the stage: the toolbar, and whatever is said under it. Stacked, so
+   neither has to know how tall the other turned out to be. The column itself is see-through to
+   the canvas, since only the controls in it are there to be used. */
+.stage__top {
   position: absolute;
   top: 0.75rem;
   left: 50%;
   display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.toolbar {
+  display: flex;
   gap: 0.75rem;
   padding: 0.3rem;
-  transform: translateX(-50%);
   border: 1px solid var(--border);
   border-radius: 8px;
   background: color-mix(in srgb, var(--surface-1) 85%, transparent);
   backdrop-filter: blur(8px);
+  pointer-events: auto;
 }
 
 .toolbar__group {
@@ -746,6 +761,8 @@ body {
     position: absolute;
     bottom: 0.75rem;
     left: 50%;
+    /* Named gestures do not fit on one phone-sized line for much longer. */
+    max-width: calc(100% - 2rem);
     margin: 0;
     padding: 0.3rem 0.7rem;
     transform: translateX(-50%);
@@ -753,11 +770,33 @@ body {
     background: color-mix(in srgb, var(--surface-1) 85%, transparent);
     color: var(--text-muted);
     font-size: 0.75rem;
-    white-space: nowrap;
+    text-align: center;
     pointer-events: none;
   }
 }
 
 .touch-hint[hidden] {
+  display: none;
+}
+
+/*
+ * Said over the model, under the toolbar: a message about something with no control of its own, and
+ * one that has to be readable on a phone, where the panel is below the fold.
+ */
+.toast {
+  max-width: min(22rem, calc(100vw - 2rem));
+  margin: 0;
+  padding: 0.35rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-1) 88%, transparent);
+  backdrop-filter: blur(8px);
+  color: var(--text);
+  font-size: 0.78rem;
+  text-align: center;
+  pointer-events: none;
+}
+
+.toast[hidden] {
   display: none;
 }

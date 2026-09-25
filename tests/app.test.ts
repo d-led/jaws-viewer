@@ -8,8 +8,10 @@ import {
   smoothingSlider,
   statusText,
   surfaceSelect,
+  toastText,
   LAYER_IDS,
 } from "./app-harness";
+import { ORBIT_CENTRE_MOVED } from "../src/ui/app";
 
 const EXPORT_FILES = exportFiles();
 
@@ -70,6 +72,14 @@ describe("the viewer application", () => {
 
     expect(link?.target).toBe("_blank");
     expect(link?.rel).toContain("noopener");
+  });
+
+  it("says that the orbit centre has moved, and how to put it back", () => {
+    const harness = createTestApp();
+
+    harness.moveOrbitCentre();
+
+    expect(toastText(harness.root)).toBe(ORBIT_CENTRE_MOVED);
   });
 
   it("adds a layer for every scan in the bundle", async () => {

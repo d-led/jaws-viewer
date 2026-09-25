@@ -6,6 +6,12 @@ import type { CameraView, LayerSurface } from "../domain/view-settings";
 export type StandardView =
   "top" | "bottom" | "front" | "back" | "left" | "right";
 
+/** A place on the canvas, in the coordinates a pointer event reports. */
+export interface ScreenPoint {
+  readonly x: number;
+  readonly y: number;
+}
+
 export interface LayerSpec {
   readonly id: string;
   readonly label: string;
@@ -29,6 +35,8 @@ export interface ViewportOptions {
   readonly onCameraSettled?: () => void;
   /** Called as a layer's surface is measured and coloured. */
   readonly onSurface?: (progress: SurfaceProgress) => void;
+  /** Called when the orbit centre has been moved onto a layer. */
+  readonly onOrbitCentre?: () => void;
 }
 
 /** What a layer's surfacing is doing, apart from which layer it is doing it to. */
@@ -81,6 +89,15 @@ export interface Viewport {
 
   fitAll(): void;
   fitLayer(id: string): void;
+
+  /**
+   * Makes whatever is under `point` the centre a later orbit or zoom turns about, and says whether
+   * the press found a layer at all.
+   *
+   * The camera is left where it is — see `pivotFor` — so nothing on screen moves. Framing the model
+   * puts the centre back where it was.
+   */
+  setOrbitCentreAt(point: ScreenPoint): boolean;
   setView(view: StandardView): void;
   setGridVisible(visible: boolean): void;
 
